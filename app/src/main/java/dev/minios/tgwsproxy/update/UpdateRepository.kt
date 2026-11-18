@@ -31,14 +31,19 @@ import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resumeWithException
 
-private const val RELEASE_API_URL =
-    "https://api.github.com/repos/crim50n/tg-ws-proxy-android/releases/latest"
-private const val MANIFEST_URL =
-    "https://raw.githubusercontent.com/crim50n/tg-ws-proxy-android/master/update.json"
-private const val RELEASE_TAG_URL =
-    "https://github.com/crim50n/tg-ws-proxy-android/releases/tag/"
-private const val RELEASE_DOWNLOAD_URL =
-    "https://github.com/crim50n/tg-ws-proxy-android/releases/download/"
+/** Repository this fork publishes releases from (update checks and the About link). */
+internal const val RELEASE_REPO = "megaflow19/tg-flow19"
+internal const val RELEASE_BRANCH = "main"
+/** Release asset name prefix: <prefix>-<versionName>.apk (+ .sha256). Keep in sync with release.yml. */
+internal const val RELEASE_APK_PREFIX = "tg-flow19"
+internal const val PROJECT_URL = "https://github.com/$RELEASE_REPO"
+
+private const val RELEASE_API_URL = "https://api.github.com/repos/$RELEASE_REPO/releases/latest"
+private const val MANIFEST_URL = "https://raw.githubusercontent.com/$RELEASE_REPO/$RELEASE_BRANCH/update.json"
+internal const val RELEASE_TAG_URL = "$PROJECT_URL/releases/tag/"
+internal const val RELEASE_DOWNLOAD_URL = "$PROJECT_URL/releases/download/"
+
+internal fun releaseApkName(versionName: String): String = "$RELEASE_APK_PREFIX-$versionName.apk"
 private const val CHECK_INTERVAL_MS = 24 * 60 * 60_000L
 private const val MAX_API_CHARS = 64 * 1024
 private const val MAX_MANIFEST_CHARS = 8 * 1024
@@ -110,7 +115,7 @@ object UpdateValidator {
         if (info.releaseUrl != "${RELEASE_TAG_URL}v${info.versionName}") return false
         if ((info.apkUrl == null) != (info.checksumUrl == null)) return false
         if (info.apkUrl != null) {
-            val apkName = "tg-ws-proxy-${info.versionName}.apk"
+            val apkName = releaseApkName(info.versionName)
             val baseUrl = "${RELEASE_DOWNLOAD_URL}v${info.versionName}/"
             if (info.apkUrl != baseUrl + apkName) return false
             if (info.checksumUrl != baseUrl + "$apkName.sha256") return false
@@ -244,7 +249,7 @@ class UpdateRepository(context: Context) {
             require(!githubRelease.draft && !githubRelease.prerelease) { "Invalid GitHub release" }
             require(githubRelease.tagName.startsWith('v')) { "Invalid release tag" }
             val versionName = githubRelease.tagName.removePrefix("v")
-            val apkName = "tg-ws-proxy-$versionName.apk"
+            val apkName = releaseApkName(versionName)
             val apkUrl = githubRelease.assets.singleOrNull { it.name == apkName }?.downloadUrl
             val checksumUrl = githubRelease.assets.singleOrNull { it.name == "$apkName.sha256" }?.downloadUrl
             val release = UpdateInfo(
@@ -314,7 +319,7 @@ class UpdateRepository(context: Context) {
             }
 
             val updateDir = File(contextCacheDir, "updates").apply { mkdirs() }
-            val finalFile = File(updateDir, "tg-ws-proxy-${release.versionName}.apk")
+            val finalFile = File(updateDir, releaseApkName(release.versionName))
             val temporaryFile = File(updateDir, "${finalFile.name}.download")
             try {
                 executeRequest(apkUrl, "application/vnd.android.package-archive").use { response ->

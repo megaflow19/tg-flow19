@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name" translatable="false">TG WS Proxy</string>
+    <string name="app_name" translatable="false">TG Flow19</string>
 
     <!-- Main screen -->
     <string name="proxy_stopped">Proxy stopped</string>
@@ -165,7 +165,7 @@
     <string name="notification_advice_channel_desc">Shows route recommendations when automatic connection mode is off</string>
     <string name="notification_update_channel_name">App updates</string>
     <string name="notification_update_channel_desc">Shows new versions only while the proxy service is running</string>
-    <string name="notification_title" translatable="false">TG WS Proxy</string>
+    <string name="notification_title" translatable="false">TG Flow19</string>
     <string name="notification_running">Traffic: %1$s</string>
     <string name="notification_running_no_traffic">Proxy is running</string>
     <string name="notification_restarting">Restarting proxy…</string>
@@ -202,7 +202,7 @@
     <string name="update_open_failed">Unable to open the release page</string>
     <string name="update_download_failed">Unable to download or verify the update</string>
     <string name="update_install_failed">Unable to open the verified update installer</string>
-    <string name="update_install_permission_required">Allow TG WS Proxy to install unknown apps, then tap Update again</string>
+    <string name="update_install_permission_required">Allow TG Flow19 to install unknown apps, then tap Update again</string>
     <string name="update_install_permission_failed">Unable to open the install permission settings</string>
     <string name="dc_ip_label" translatable="false">DC:IP</string>
 
@@ -260,7 +260,7 @@
     <string name="about_background_text">Includes a foreground service, notification controls, Quick Settings tile, and live statistics.</string>
     <string name="about_source_code">Source code</string>
     <string name="about_license">MIT License</string>
-    <string name="about_based_on">Inspired by tg-ws-proxy by Flowseal. Developed independently of Flowseal; not an official Telegram product.</string>
+    <string name="about_based_on">Fork of TG WS Proxy by crim50n, which is inspired by tg-ws-proxy by Flowseal. Developed independently of both; not an official Telegram product.</string>
     <string name="about_flowseal_project">Original Flowseal project</string>
     <string name="about_limits_title">Important limits</string>
     <string name="about_limits_text">Not a VPN or an anonymity guarantee. The WS client does not verify server certificates; direct TCP adds no TLS. Telegram message encryption is separate.</string>

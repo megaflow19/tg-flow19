@@ -22,10 +22,11 @@ import androidx.compose.ui.viewinterop.AndroidView
 import dev.minios.tgwsproxy.BuildConfig
 import dev.minios.tgwsproxy.R
 import dev.minios.tgwsproxy.ui.icons.TablerIcons
+import dev.minios.tgwsproxy.update.PROJECT_URL
+import dev.minios.tgwsproxy.update.RELEASE_BRANCH
 import dev.minios.tgwsproxy.update.UpdateState
 
-private const val PROJECT_URL = "https://github.com/crim50n/tg-ws-proxy-android"
-private const val LICENSE_URL = "$PROJECT_URL/blob/master/LICENSE"
+private const val LICENSE_URL = "$PROJECT_URL/blob/$RELEASE_BRANCH/LICENSE"
 private const val FLOWSEAL_URL = "https://github.com/Flowseal/tg-ws-proxy"
 
 @OptIn(ExperimentalMaterial3Api::class)

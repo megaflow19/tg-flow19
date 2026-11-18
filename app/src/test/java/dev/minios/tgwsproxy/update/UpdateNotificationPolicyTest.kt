@@ -10,7 +10,7 @@ class UpdateNotificationPolicyTest {
 
     private fun release(version: String, code: Int? = null) = UpdateInfo(
         versionName = version,
-        releaseUrl = "https://github.com/crim50n/tg-ws-proxy-android/releases/tag/v$version",
+        releaseUrl = "${RELEASE_TAG_URL}v$version",
         versionCode = code,
     )
 

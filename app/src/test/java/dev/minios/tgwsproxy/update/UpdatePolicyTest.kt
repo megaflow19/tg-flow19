@@ -11,12 +11,12 @@ class UpdatePolicyTest {
     private fun release(version: String, versionCode: Int? = null) = UpdateInfo(
         versionName = version,
         versionCode = versionCode,
-        releaseUrl = "https://github.com/crim50n/tg-ws-proxy-android/releases/tag/v$version",
+        releaseUrl = "${RELEASE_TAG_URL}v$version",
     )
 
     private fun installableRelease(version: String): UpdateInfo {
-        val apkName = "tg-ws-proxy-$version.apk"
-        val base = "https://github.com/crim50n/tg-ws-proxy-android/releases/download/v$version/"
+        val apkName = releaseApkName(version)
+        val base = "${RELEASE_DOWNLOAD_URL}v$version/"
         return release(version).copy(
             apkUrl = base + apkName,
             checksumUrl = base + "$apkName.sha256",
@@ -49,7 +49,13 @@ class UpdatePolicyTest {
     fun rejectsReleaseUrlForAnotherTagOrRepository() {
         assertFalse(
             UpdateValidator.isValid(
-                UpdateInfo("5.0.0", "https://github.com/crim50n/tg-ws-proxy-android/releases/tag/v4.0.0"),
+                UpdateInfo("5.0.0", "${RELEASE_TAG_URL}v4.0.0"),
+            ),
+        )
+        // A release of the upstream project must not be offered as our update.
+        assertFalse(
+            UpdateValidator.isValid(
+                UpdateInfo("5.0.0", "https://github.com/crim50n/tg-ws-proxy-android/releases/tag/v5.0.0"),
             ),
         )
         assertFalse(UpdateValidator.isValid(UpdateInfo("5.0.0", "https://example.com/tag/v5.0.0")))
@@ -62,14 +68,14 @@ class UpdatePolicyTest {
         assertFalse(
             UpdateValidator.isValid(
                 installableRelease("5.0.0").copy(
-                    apkUrl = "https://example.com/tg-ws-proxy-5.0.0.apk",
+                    apkUrl = "https://example.com/${releaseApkName("5.0.0")}",
                 ),
             ),
         )
         assertFalse(
             UpdateValidator.isValid(
                 installableRelease("5.0.0").copy(
-                    checksumUrl = "https://github.com/crim50n/tg-ws-proxy-android/releases/download/v5.0.0/other.sha256",
+                    checksumUrl = "${RELEASE_DOWNLOAD_URL}v5.0.0/other.sha256",
                 ),
             ),
         )
@@ -78,7 +84,7 @@ class UpdatePolicyTest {
     @Test
     fun parsesSha256AssetAndRejectsInvalidContent() {
         val checksum = "a".repeat(64)
-        assertEquals(checksum, parseSha256("$checksum  tg-ws-proxy-5.0.0.apk\n"))
+        assertEquals(checksum, parseSha256("$checksum  ${releaseApkName("5.0.0")}\n"))
         assertThrows(IllegalArgumentException::class.java) { parseSha256("not-a-checksum") }
     }
 }

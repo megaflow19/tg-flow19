@@ -246,7 +246,7 @@ object DiagnosticLogger {
                     val output = newExportFile(context)
                     output.parentFile?.mkdirs()
                     output.bufferedWriter(Charsets.UTF_8).use { export ->
-                        export.appendLine("TG WS Proxy diagnostics")
+                        export.appendLine("TG Flow19 diagnostics")
                         export.appendLine("App: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
                         export.appendLine("Android: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
                         export.appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL}")
@@ -431,6 +431,6 @@ object DiagnosticLogger {
     private fun exportDirectory(context: Context) = File(context.cacheDir, LOG_DIR)
     private fun newExportFile(context: Context) = File(
         exportDirectory(context),
-        "tg-ws-proxy-diagnostics-${System.currentTimeMillis()}-${exportSequence.incrementAndGet()}.txt",
+        "tg-flow19-diagnostics-${System.currentTimeMillis()}-${exportSequence.incrementAndGet()}.txt",
     )
 }

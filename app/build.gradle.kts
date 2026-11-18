@@ -16,7 +16,9 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "dev.minios.tgwsproxy"
+        // Own ID (fork of crim50n's dev.minios.tgwsproxy): installs alongside the original.
+        // Never change it after the first public release, or updates stop installing over it.
+        applicationId = "io.github.megaflow19.tgflow19"
         minSdk = 26
         targetSdk = 34
         versionCode = 13
@@ -47,7 +49,7 @@ android {
             // e.g. 2.1.0-dev.1118-0107. Update checks compare versionCode, not this name.
             versionNameSuffix = "-dev." + LocalDateTime.now(ZoneId.of("Europe/Moscow"))
                 .format(DateTimeFormatter.ofPattern("MMdd-HHmm"))
-            manifestPlaceholders["appLabel"] = "TG WS Proxy Dev"
+            manifestPlaceholders["appLabel"] = "TG Flow19 Dev"
         }
         release {
             manifestPlaceholders["appLabel"] = "@string/app_name"

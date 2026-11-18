@@ -199,7 +199,7 @@
     <string name="update_open_failed">Не удалось открыть страницу релиза</string>
     <string name="update_download_failed">Не удалось скачать или проверить обновление</string>
     <string name="update_install_failed">Не удалось открыть установщик проверенного обновления</string>
-    <string name="update_install_permission_required">Разрешите TG WS Proxy устанавливать неизвестные приложения, затем снова нажмите «Обновить»</string>
+    <string name="update_install_permission_required">Разрешите TG Flow19 устанавливать неизвестные приложения, затем снова нажмите «Обновить»</string>
     <string name="update_install_permission_failed">Не удалось открыть настройки разрешения на установку</string>
 
     <!-- Event log -->
@@ -256,7 +256,7 @@
     <string name="about_background_text">Фоновый сервис, управление из уведомления, плитка быстрых настроек и статистика в реальном времени.</string>
     <string name="about_source_code">Исходный код</string>
     <string name="about_license">Лицензия MIT</string>
-    <string name="about_based_on">Вдохновлено tg-ws-proxy от Flowseal. Развивается независимо от Flowseal и не является официальным продуктом Telegram.</string>
+    <string name="about_based_on">Форк TG WS Proxy от crim50n, который вдохновлён tg-ws-proxy от Flowseal. Развивается независимо от обоих проектов и не является официальным продуктом Telegram.</string>
     <string name="about_flowseal_project">Исходный проект Flowseal</string>
     <string name="about_limits_title">Важные ограничения</string>
     <string name="about_limits_text">Не VPN и не гарантия анонимности. WS-клиент не проверяет сертификаты серверов; прямой TCP не добавляет TLS. Шифрование сообщений Telegram действует отдельно.</string>

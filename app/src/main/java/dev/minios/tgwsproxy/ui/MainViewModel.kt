@@ -280,7 +280,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val cfg = config.value
         val link = cfg.proxyLink()
         val clipboard = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("TG WS Proxy Link", link))
+        clipboard.setPrimaryClip(ClipData.newPlainText("TG Flow19 Link", link))
         Toast.makeText(ctx, R.string.link_copied, Toast.LENGTH_SHORT).show()
     }
 

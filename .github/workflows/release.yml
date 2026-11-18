@@ -61,7 +61,7 @@ jobs:
           MANIFEST_APK_URL=$(python3 -c 'import json; print(json.load(open("update.json"))["apkUrl"])')
           MANIFEST_CHECKSUM_URL=$(python3 -c 'import json; print(json.load(open("update.json"))["checksumUrl"])')
           EXPECTED_URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/v${{ steps.version.outputs.name }}"
-          EXPECTED_APK_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${{ steps.version.outputs.name }}/tg-ws-proxy-${{ steps.version.outputs.name }}.apk"
+          EXPECTED_APK_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${{ steps.version.outputs.name }}/tg-flow19-${{ steps.version.outputs.name }}.apk"
           test "$MANIFEST_VERSION" = "${{ steps.version.outputs.name }}" || { echo "::error::update.json versionName mismatch"; exit 1; }
           test "$MANIFEST_CODE" = "${{ steps.version.outputs.code }}" || { echo "::error::update.json versionCode mismatch"; exit 1; }
           test "$MANIFEST_URL" = "$EXPECTED_URL" || { echo "::error::update.json releaseUrl mismatch"; exit 1; }
@@ -95,13 +95,13 @@ jobs:
             echo "::error::No APK found in app/build/outputs/apk/release/"
             exit 1
           fi
-          cp "$APK" "release-apks/tg-ws-proxy-${VERSION}.apk"
-          (cd release-apks && sha256sum "tg-ws-proxy-${VERSION}.apk" > "tg-ws-proxy-${VERSION}.apk.sha256")
+          cp "$APK" "release-apks/tg-flow19-${VERSION}.apk"
+          (cd release-apks && sha256sum "tg-flow19-${VERSION}.apk" > "tg-flow19-${VERSION}.apk.sha256")
 
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: tg-ws-proxy-release-${{ steps.version.outputs.name }}
+          name: tg-flow19-release-${{ steps.version.outputs.name }}
           path: release-apks/*
           retention-days: 90
 

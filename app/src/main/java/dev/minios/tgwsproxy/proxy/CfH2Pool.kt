@@ -234,7 +234,7 @@ class CfH2Pool internal constructor(
                 call.execute().use { response ->
                     pending.receivingHeaders = true
                     if (response.protocol != Protocol.HTTP_2) throw IOException("H2 downgrade")
-                    if (response.code in setOf(403, 404, 429, 444)) throw H2TransportError(-response.code)
+                    if (response.code in setOf(403, 404, 429, 444)) throw H2TransportError(-response.code, "http")
                     if (response.code != 200 || response.header("Content-Type").orEmpty().contains("text/html", true)) {
                         throw IOException("Invalid H2 response")
                     }
@@ -257,7 +257,7 @@ class CfH2Pool internal constructor(
                         throw IOException("Incomplete H2 response")
                     }
                     if (reply.size % 4 != 0) throw IOException("Unaligned H2 response")
-                    if (reply.size == 4 && NativeHttpCodec.intLE(reply) < 0) throw H2TransportError(NativeHttpCodec.intLE(reply))
+                    if (reply.size == 4 && NativeHttpCodec.intLE(reply) < 0) throw H2TransportError(NativeHttpCodec.intLE(reply), "mtproto")
                     delivered = true
                     reply
                 }
@@ -429,7 +429,11 @@ class CfH2Pool internal constructor(
                         retryAfter[lane.host] = System.currentTimeMillis() + 30_000
                     }
                 }
-                DiagnosticLogger.failure("h2_request_failed", e, "dc" to dc)
+                if (e is H2TransportError) {
+                    DiagnosticLogger.failure("h2_request_failed", e, "dc" to dc, "code" to e.code, "source" to e.source)
+                } else {
+                    DiagnosticLogger.failure("h2_request_failed", e, "dc" to dc)
+                }
             }
         }
 
@@ -583,7 +587,12 @@ class CfH2Pool internal constructor(
     }
 }
 
-private class H2TransportError(val code: Int) : IOException("MTProto transport error")
+/**
+ * Transport-level rejection: [source] "http" = Cloudflare/proxy HTTP status (code = -status),
+ * "mtproto" = 4-byte negative MTProto transport reply (e.g. -404 auth key, -429 flood).
+ */
+private class H2TransportError(val code: Int, val source: String) :
+    IOException("MTProto transport error $code ($source)")
 
 /** Weighted, cancellable memory backpressure; no network data persists across epochs. */
 class ByteBudget(private val limit: Int) {

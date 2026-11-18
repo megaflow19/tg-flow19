@@ -417,7 +417,17 @@ class TgWsProxyServer(
                     Log.w(TAG, "Invalid handshake from $clientAddr (total bad: $count)")
                 }
                 ProxyStats.connectionsBad.incrementAndGet()
-                DiagnosticLogger.event("handshake_rejected", "total" to count)
+                DiagnosticLogger.event(
+                    "handshake_rejected",
+                    "total" to count,
+                    // 16030x.. = TLS ClientHello (an `ee` Fake TLS link while Fake TLS is off);
+                    // otherwise random obfuscated bytes.
+                    "head" to initData.copyOfRange(0, 4).joinToString("") { "%02x".format(it) },
+                    // efefefef/eeeeeeee/dddddddd would mean a valid tag; anything else means
+                    // the client used a different secret.
+                    "tag" to MtProtoCrypto.peekProtoTag(initData, config.secretBytes())?.let { "%08x".format(it) },
+                    "fakeTls" to config.fakeTlsDomain.isNotBlank(),
+                )
                 // Drain connection (matching Python behavior to avoid connection reset)
                 try {
                     val drainBuf = ByteArray(4096)

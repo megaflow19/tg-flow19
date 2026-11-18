@@ -47,6 +47,19 @@ object MtProtoCrypto {
      * Parse a 64-byte MTProto obfuscation handshake.
      * Returns the protocol tag, DC index, and CryptoCtx, or null if invalid.
      */
+    /**
+     * Diagnostics only: the protocol tag a handshake decrypts to with [secret]. A known tag
+     * means the secret matches; random-looking values mean a different secret or a non-MTProto
+     * client. Reveals nothing about the key material.
+     */
+    fun peekProtoTag(initData: ByteArray, secret: ByteArray): Int? {
+        if (initData.size != MtProtoConstants.HANDSHAKE_LEN) return null
+        val prekey = initData.sliceArray(MtProtoConstants.SKIP_LEN until MtProtoConstants.SKIP_LEN + MtProtoConstants.PREKEY_LEN)
+        val iv = initData.sliceArray(MtProtoConstants.SKIP_LEN + MtProtoConstants.PREKEY_LEN until MtProtoConstants.SKIP_LEN + MtProtoConstants.PREKEY_LEN + MtProtoConstants.IV_LEN)
+        val decrypted = AesCtr(deriveKey(prekey, secret), iv).update(initData)
+        return readInt32LE(decrypted, MtProtoConstants.PROTO_TAG_POS)
+    }
+
     fun parseHandshake(
         initData: ByteArray,
         secret: ByteArray,

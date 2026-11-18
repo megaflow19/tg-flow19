@@ -175,8 +175,14 @@ class CfH2Pool internal constructor(
         private val client = OkHttpClient.Builder()
             .socketFactory(socketFactory)
             .dns(object : Dns {
-                override fun lookup(hostname: String): List<InetAddress> =
-                    Dns.SYSTEM.lookup(if (hostname == sniHost) host else hostname)
+                override fun lookup(hostname: String): List<InetAddress> {
+                    // While the DNS addresses are blocked on this network, use the Cloudflare
+                    // edge that the WebSocket route found working (see CfEdgeRouter).
+                    CfEdgeRouter.shared.h2Override(connectivity.state.value.networkId)?.let {
+                        return listOf(InetAddress.getByName(it))
+                    }
+                    return Dns.SYSTEM.lookup(if (hostname == sniHost) host else hostname)
+                }
             })
             .sslSocketFactory(tls.socketFactory, trust)
             .hostnameVerifier { _, _ -> true } // Same deliberate transport policy as RawWebSocket.

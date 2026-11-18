@@ -76,6 +76,8 @@ class Bridge internal constructor(
     private val connectivity: ConnectivityTracker,
     // Process-wide by default: must survive runtime restarts (see DirectWsCircuitBreaker).
     private val directWsCircuitBreaker: DirectWsCircuitBreaker,
+    // Process-wide by default, keyed by network: remembers which Cloudflare edge works.
+    private val cfEdgeRouter: CfEdgeRouter = CfEdgeRouter.shared,
 ) {
     constructor(connectivity: ConnectivityTracker) : this(connectivity, DirectWsCircuitBreaker.shared)
 
@@ -98,9 +100,90 @@ class Bridge internal constructor(
         }
     }
 
+    /**
+     * Dials a WebSocket. For the TLS CF proxy route this walks [CfEdgeRouter]'s plan: the
+     * remembered edge, the DNS address, then alternate Cloudflare edges after a network-level
+     * failure of the DNS address. An HTTP answer from the proxy (other than 403 from an edge
+     * that does not serve the zone) is a server response, not address blocking, so it is
+     * rethrown without trying other addresses.
+     */
     private fun dial(epoch: Long, dc: Int, media: Boolean, target: String, buffer: Int,
                      timeout: Int, cfDomain: String? = null, secure: Boolean = true,
                      isTestDc: Boolean = false): RawWebSocket {
+        if (cfDomain == null || !secure) {
+            return dialVia(epoch, dc, media, target, buffer, timeout, cfDomain, secure, isTestDc, edgeIp = null)
+        }
+        val networkId = connectivity.state.value.networkId
+        val hops = cfEdgeRouter.plan(networkId)
+        var dnsFailed = false
+        var lastError: Exception? = null
+        for (hop in hops) {
+            if (cfEdgeRouter.isFallback(hops, hop) && !dnsFailed) break
+            checkEpoch(epoch)
+            try {
+                val ws = when (hop) {
+                    CfEdgeRouter.Hop.Dns ->
+                        dialVia(epoch, dc, media, target, buffer, timeout, cfDomain, secure, isTestDc, edgeIp = null)
+                    is CfEdgeRouter.Hop.Edge ->
+                        dialVia(epoch, dc, media, target, buffer, minOf(timeout, CfEdgeRouter.EDGE_TIMEOUT_MS),
+                            cfDomain, secure, isTestDc, edgeIp = hop.ip)
+                }
+                connectivity.recordIfCurrent(epoch) {
+                    when (hop) {
+                        CfEdgeRouter.Hop.Dns -> cfEdgeRouter.dnsWorked(networkId)
+                        is CfEdgeRouter.Hop.Edge -> {
+                            cfEdgeRouter.edgeWorked(networkId, hop, afterDnsFailure = dnsFailed)
+                            DiagnosticLogger.event(
+                                "cf_edge_used", "dc" to dc, "media" to media,
+                                "edge" to hop.index, "afterDnsFailure" to dnsFailed,
+                            )
+                        }
+                    }
+                }
+                return ws
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: WsHandshakeError) {
+                if (hop is CfEdgeRouter.Hop.Edge && e.statusCode == 403) {
+                    connectivity.recordIfCurrent(epoch, requireInternet = true) {
+                        cfEdgeRouter.edgeFailed(networkId, hop, forbidden = true)
+                    }
+                    DiagnosticLogger.event("cf_edge_failed", "edge" to hop.index, "reason" to "forbidden")
+                    lastError = e
+                    continue
+                }
+                throw e
+            } catch (e: Exception) {
+                lastError = e
+                if (CfEdgeRouter.isLocalNetworkFailure(e)) {
+                    // The phone had no route at all (network switching or gone): not address
+                    // blocking. Do not penalize edges, and do not walk the rest of the list.
+                    // Seen 2026-11-19: one network switch cooled 13 of 16 edges in a second.
+                    if (hop is CfEdgeRouter.Hop.Edge) {
+                        DiagnosticLogger.event("cf_edge_failed", "edge" to hop.index, "reason" to "no_network")
+                    }
+                    break
+                }
+                when (hop) {
+                    CfEdgeRouter.Hop.Dns -> dnsFailed = true
+                    is CfEdgeRouter.Hop.Edge -> {
+                        connectivity.recordIfCurrent(epoch, requireInternet = true) {
+                            cfEdgeRouter.edgeFailed(networkId, hop, forbidden = false)
+                        }
+                        DiagnosticLogger.event(
+                            "cf_edge_failed", "edge" to hop.index, "reason" to (e::class.simpleName ?: "error"),
+                        )
+                    }
+                }
+            }
+        }
+        throw lastError ?: WebSocketException("No CF proxy address available for DC $dc")
+    }
+
+    /** One WebSocket attempt; [edgeIp] overrides the CF proxy address (TLS SNI/Host unchanged). */
+    private fun dialVia(epoch: Long, dc: Int, media: Boolean, target: String, buffer: Int,
+                        timeout: Int, cfDomain: String?, secure: Boolean,
+                        isTestDc: Boolean, edgeIp: String?): RawWebSocket {
         checkEpoch(epoch)
         val sockets = mutableListOf<Socket>()
         try {
@@ -112,11 +195,12 @@ class Bridge internal constructor(
                 },
                 resolveCfAddress = { domain ->
                     checkEpoch(epoch)
-                    cfDnsResolver.resolve(domain, connectivity, epoch).also { checkEpoch(epoch) }
+                    if (edgeIp != null) null
+                    else cfDnsResolver.resolve(domain, connectivity, epoch).also { checkEpoch(epoch) }
                 },
                 cachedCfAddress = { domain ->
-                    var address: String? = null
-                    connectivity.recordIfCurrent(epoch) { address = cfDnsResolver.cached(domain) }
+                    var address: String? = edgeIp
+                    if (address == null) connectivity.recordIfCurrent(epoch) { address = cfDnsResolver.cached(domain) }
                     address
                  }, secure = secure, isTestDc = isTestDc)
             if (!connectivity.isCurrent(epoch)) {

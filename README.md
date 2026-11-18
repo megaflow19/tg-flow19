@@ -4,7 +4,16 @@
 (TG WS Proxy, MIT), which is based on [Flowseal/tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy) (MIT).
 It is not affiliated with crim50n, Flowseal or Telegram.
 
-Changes in this fork so far:
+## Download
+
+- **[Latest release](https://github.com/megaflow19/tg-flow19/releases/latest)**: one universal APK
+  for Android 8.0+ (arm64-v8a, armeabi-v7a, x86, x86_64), with a `.sha256` checksum.
+- **[Obtainium](https://github.com/ImranR98/Obtainium):** add `https://github.com/megaflow19/tg-flow19`
+  to get updates automatically.
+- Release APKs are signed with this certificate (SHA-256):
+  `59:ED:87:B6:4A:D0:C7:DE:03:D3:82:B0:D9:59:4D:52:E5:15:BD:AB:67:7B:59:A7:F6:35:90:CF:8E:30:D3:F3`
+
+## Changes from TG WS Proxy
 
 - **Cloudflare proxy route:** TLS SNI is the bare base domain, and `kwsN.<domain>` goes only in the
   HTTP `Host` header. Fixes networks whose DPI drops handshakes with `kws*` SNI.
@@ -16,10 +25,13 @@ Changes in this fork so far:
   maker's app launch settings, and freeze detection in diagnostics.
 - **Own app ID** `io.github.megaflow19.tgflow19`, so it installs alongside the original.
 
+Release notes: [`release-notes/`](release-notes/) (crim50n's original notes are in
+[`release-notes/upstream/`](release-notes/upstream/)).
+
 > [!NOTE]
-> **No releases yet.** Everything below this line is the original TG WS Proxy README by crim50n:
-> the cover illustration and screenshots are crim50n's (TG WS Proxy v2.0.0, MIT) and show the
-> original app, and the badges and download links point to crim50n's releases.
+> Everything below this line is the original TG WS Proxy README by crim50n: the cover illustration
+> and screenshots are crim50n's (TG WS Proxy v2.0.0, MIT) and show the original app, and the badges
+> and download links point to crim50n's releases, not to TG Flow19.
 
 ---
 

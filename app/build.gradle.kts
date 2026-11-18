@@ -21,8 +21,9 @@ android {
         applicationId = "io.github.megaflow19.tgflow19"
         minSdk = 26
         targetSdk = 34
-        versionCode = 13
-        versionName = "2.1.0"
+        // versionCode = major*10000 + minor*100 + patch (1.0.0 -> 10000); must match update.json.
+        versionCode = 10000
+        versionName = "1.0.0"
     }
 
     val hasPropertiesFile = File("app/keystore/signing.properties").exists()
@@ -46,7 +47,7 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             // Build stamp (Moscow time) to tell debug builds apart in About and diagnostics,
-            // e.g. 2.1.0-dev.1118-0107. Update checks compare versionCode, not this name.
+            // e.g. 1.0.0-dev.1119-0130. Update checks compare versionCode, not this name.
             versionNameSuffix = "-dev." + LocalDateTime.now(ZoneId.of("Europe/Moscow"))
                 .format(DateTimeFormatter.ofPattern("MMdd-HHmm"))
             manifestPlaceholders["appLabel"] = "TG Flow19 Dev"

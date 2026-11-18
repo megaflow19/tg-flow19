@@ -53,7 +53,8 @@ class RawWebSocket private constructor(
         /**
          * Connect to a WebSocket endpoint.
          * @param connectHost IP address or hostname to connect to (TCP level)
-         * @param domain domain name for TLS SNI and HTTP Host header
+         * @param domain domain name for the HTTP Host header (and TLS SNI unless [sni] is given)
+         * @param sni TLS SNI; differs from [domain] for CF proxy, see [cfProxySni]
          * @param path WebSocket path
          * @param port TCP port
          * @param connectTimeoutMs connection timeout in milliseconds
@@ -68,6 +69,7 @@ class RawWebSocket private constructor(
             bufferSize: Int = 256 * 1024,
             onSocketCreated: ((Socket) -> Unit)? = null,
             secure: Boolean = true,
+            sni: String = domain,
         ): RawWebSocket {
             // Reuse global TLS context (matching Python's module-level ssl.SSLContext)
             val factory = globalSslContext.socketFactory
@@ -85,7 +87,7 @@ class RawWebSocket private constructor(
                 // Set SNI hostname for TLS while connecting to the configured IP.
                 if (socket is SSLSocket) {
                     val sslParams = socket.sslParameters
-                    sslParams.serverNames = listOf(javax.net.ssl.SNIHostName(domain))
+                    sslParams.serverNames = listOf(javax.net.ssl.SNIHostName(sni))
                     socket.sslParameters = sslParams
                 }
 
@@ -166,6 +168,21 @@ class RawWebSocket private constructor(
             return RawWebSocket(socket, input, output)
         }
 
+        private val CF_PROXY_HOST = Regex("^kws\\d+\\.(.+)$")
+
+        /**
+         * TLS SNI for a CF proxy host `kwsN.<base>`: the bare `<base>` domain.
+         *
+         * DPI on some networks (verified 2026-11-18) drops TLS handshakes whose
+         * SNI matches `kws*`, while the same Cloudflare IP with SNI `<base>` completes, and
+         * the CF proxy still routes by the `Host: kwsN.<base>` header sent inside TLS.
+         * Telegram's own `kwsN.web.telegram.org` (direct WS) is left unchanged.
+         */
+        fun cfProxySni(host: String): String {
+            val base = CF_PROXY_HOST.matchEntire(host)?.groupValues?.get(1) ?: return host
+            return if (base == "web.telegram.org") host else base
+        }
+
         /**
          * Connect to a Telegram DC via WebSocket.
          * @param dc data center number
@@ -208,6 +225,7 @@ class RawWebSocket private constructor(
                             connectTarget
                         },
                         domain = domain,
+                        sni = cfProxySni(domain),
                         path = if (isTestDc && cfProxyDomain == null) "/apiws_test" else "/apiws",
                         bufferSize = bufferSize,
                         connectTimeoutMs = connectTimeoutMs,
@@ -235,6 +253,7 @@ class RawWebSocket private constructor(
                                 return connect(
                                     connectHost = resolvedAddress,
                                     domain = domain,
+                                    sni = cfProxySni(domain),
                                     bufferSize = bufferSize,
                                     connectTimeoutMs = connectTimeoutMs,
                                     onSocketCreated = onSocketCreated,

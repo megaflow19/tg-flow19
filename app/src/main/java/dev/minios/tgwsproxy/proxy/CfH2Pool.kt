@@ -6,6 +6,7 @@ import kotlinx.coroutines.channels.Channel as Queue
 import kotlinx.coroutines.sync.Semaphore
 import okhttp3.Call
 import okhttp3.ConnectionPool
+import okhttp3.Dns
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
@@ -129,6 +130,12 @@ class CfH2Pool internal constructor(
     }
 
     inner class Lane(val host: String, val epoch: Long) {
+        // The request URL (hence TLS SNI) uses the bare CF base domain, because DPI drops
+        // `kws*` SNI (see RawWebSocket.cfProxySni). The explicit `Host: kwsN.<base>` header
+        // becomes the HTTP/2 :authority, so the CF proxy still routes to the right DC.
+        // The base domain has no DNS record of its own, so it resolves via `host`.
+        private val sniHost = RawWebSocket.cfProxySni(host)
+        private val apiUrl = "https://$sniHost/api"
         @Volatile var closed = false
         val slots = Semaphore(64)
         val uploads = ByteBudget(32 * 1024 * 1024)
@@ -167,6 +174,10 @@ class CfH2Pool internal constructor(
         }
         private val client = OkHttpClient.Builder()
             .socketFactory(socketFactory)
+            .dns(object : Dns {
+                override fun lookup(hostname: String): List<InetAddress> =
+                    Dns.SYSTEM.lookup(if (hostname == sniHost) host else hostname)
+            })
             .sslSocketFactory(tls.socketFactory, trust)
             .hostnameVerifier { _, _ -> true } // Same deliberate transport policy as RawWebSocket.
             .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
@@ -191,7 +202,7 @@ class CfH2Pool internal constructor(
         private fun newCall(request: Request): Call = hooks.callFactory?.invoke(request) ?: client.newCall(request)
 
         fun preflight(timeoutMs: Long) {
-            val call = newCall(Request.Builder().url("https://$host/api").head().build())
+            val call = newCall(Request.Builder().url(apiUrl).header("Host", host).head().build())
             call.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS)
             call.execute().use {
                 if (it.protocol != Protocol.HTTP_2 || !(it.isSuccessful || it.code == 405 || it.code == 501)) {
@@ -207,7 +218,8 @@ class CfH2Pool internal constructor(
                 if (!replies.tryAcquire(reply.size)) throw IOException("H2 lane response buffer limit")
                 return@withContext reply
             }
-            val call = newCall(Request.Builder().url("https://$host/api")
+            val call = newCall(Request.Builder().url(apiUrl)
+                .header("Host", host)
                 .header("Accept-Encoding", "identity")
                 .tag(PendingRequest::class.java, pending)
                 .post(body.toRequestBody("application/octet-stream".toMediaType())).build())

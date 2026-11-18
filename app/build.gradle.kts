@@ -1,4 +1,7 @@
 import java.io.FileInputStream
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Properties
 
 plugins {
@@ -40,6 +43,10 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
+            // Build stamp (Moscow time) to tell debug builds apart in About and diagnostics,
+            // e.g. 2.1.0-dev.1118-0107. Update checks compare versionCode, not this name.
+            versionNameSuffix = "-dev." + LocalDateTime.now(ZoneId.of("Europe/Moscow"))
+                .format(DateTimeFormatter.ofPattern("MMdd-HHmm"))
             manifestPlaceholders["appLabel"] = "TG WS Proxy Dev"
         }
         release {

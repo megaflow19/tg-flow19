@@ -27,7 +27,9 @@ import dev.minios.tgwsproxy.proxy.RuntimeRouteMode
 import dev.minios.tgwsproxy.proxy.StatsSnapshot
 import dev.minios.tgwsproxy.service.ProxyServiceState
 import dev.minios.tgwsproxy.service.ProxyStartFailure
+import dev.minios.tgwsproxy.ui.BackgroundRestrictedCard
 import dev.minios.tgwsproxy.ui.ConnectionSummary
+import dev.minios.tgwsproxy.ui.rememberBackgroundProtectionState
 import dev.minios.tgwsproxy.ui.icons.TablerIcons
 import dev.minios.tgwsproxy.ui.presentConnectivity
 import dev.minios.tgwsproxy.ui.theme.*
@@ -161,6 +163,18 @@ fun MainScreen(
                             Spacer(modifier = Modifier.height(16.dp))
                             PortInUseCard(port = failure.port, onOpenSettings = onOpenSettings)
                         }
+                    }
+                }
+
+                val protection = rememberBackgroundProtectionState()
+                AnimatedVisibility(
+                    visible = isActive && !protection.batteryOptimizationIgnored,
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically(),
+                ) {
+                    Column {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        BackgroundRestrictedCard(protection.vendorAutostartAvailable)
                     }
                 }
 

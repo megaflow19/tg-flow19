@@ -105,6 +105,16 @@
     <string name="settings_restore_proxy_desc">Прокси запоминает последнее действие запуска или остановки. Если оставить его включённым, после загрузки устройства он восстановится. Нажмите «Остановить» в приложении или уведомлении либо выключите плитку быстрых настроек, чтобы он оставался выключенным.</string>
     <string name="settings_keep_cpu_awake">Не давать устройству засыпать</string>
     <string name="settings_keep_cpu_awake_desc">Предотвращает глубокий сон для надёжной работы с выключенным экраном. Отключение снижает расход в простое.</string>
+    <string name="settings_battery_optimization">Оптимизация батареи</string>
+    <string name="settings_battery_optimization_off">Отключена — система не будет усыплять прокси</string>
+    <string name="settings_battery_optimization_on">Включена — система может заморозить прокси в фоне</string>
+    <string name="settings_vendor_autostart">Запуск приложений (%1$s)</string>
+    <string name="settings_vendor_autostart_desc">Экран настроек производителя телефона. Найдите в списке это приложение, выключите автоматическое управление и разрешите автозапуск, косвенный запуск и работу в фоне.</string>
+    <string name="background_restricted_title">Прокси может «засыпать» в фоне</string>
+    <string name="background_restricted_message">Система оптимизирует батарею для этого приложения и может заморозить прокси: Telegram перестанет подключаться, пока вы не откроете приложение. Отключите оптимизацию батареи, а на Honor, Huawei, Xiaomi и других — ещё и разрешите работу в фоне в настройках запуска приложений.</string>
+    <string name="background_fix">Исправить</string>
+    <string name="background_open">Открыть</string>
+    <string name="background_open_autostart">Запуск приложений</string>
     <string name="settings_preconnect_ws">Подготавливать WebSocket-соединения</string>
     <string name="settings_preconnect_ws_desc">Поддерживает готовые прямые соединения для быстрого запуска. При отключении подготовленные соединения не используются, а ручной размер пула сохраняется.</string>
     <string name="settings_ws_ping_interval">Интервал поддержания WebSocket-соединений</string>

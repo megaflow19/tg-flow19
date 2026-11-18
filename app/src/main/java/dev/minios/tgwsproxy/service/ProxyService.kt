@@ -52,6 +52,8 @@ import dev.minios.tgwsproxy.proxy.RuntimeRouteMode
 import dev.minios.tgwsproxy.proxy.runtimeRouteMode
 import dev.minios.tgwsproxy.proxy.TgWsProxyServer
 import dev.minios.tgwsproxy.ui.MainActivity
+import dev.minios.tgwsproxy.power.BackgroundProtection
+import dev.minios.tgwsproxy.power.ProcessPauseDetector
 
 private const val TAG = "ProxyService"
 private const val CHANNEL_ID = "tg_ws_proxy_service"
@@ -212,6 +214,8 @@ class ProxyService : Service() {
         instance = this
         DiagnosticLogger.initialize(applicationContext)
         DiagnosticLogger.event("service_created")
+        logBackgroundProtection()
+        startPauseWatch()
         notificationManager = getSystemService(NotificationManager::class.java)
         updateRepository = UpdateRepository(applicationContext)
         TgWsProxyServer.globalVerbose = dev.minios.tgwsproxy.BuildConfig.DEBUG
@@ -629,6 +633,45 @@ class ProxyService : Service() {
         serviceScope?.cancel()
         serviceScope = null
         releaseWakeLock()
+    }
+
+    /** Records whether vendor/OS power management may freeze or kill this process. */
+    private fun logBackgroundProtection() {
+        runCatching {
+            DiagnosticLogger.event(
+                "background_protection",
+                "batteryOptimizationIgnored" to BackgroundProtection.isIgnoringBatteryOptimizations(this),
+                "standbyBucket" to BackgroundProtection.standbyBucket(this),
+                "vendorAutostart" to (BackgroundProtection.vendorAutostartComponent(this)?.packageName ?: "none"),
+            )
+        }
+    }
+
+    /**
+     * Heartbeat that reports when this process was paused (see ProcessPauseDetector). Runs for
+     * the service lifetime on lifecycleScope, which onDestroy cancels.
+     */
+    private fun startPauseWatch() {
+        lifecycleScope.launch(Dispatchers.Default) {
+            var lastElapsed = SystemClock.elapsedRealtime()
+            var lastUptime = SystemClock.uptimeMillis()
+            while (isActive) {
+                delay(ProcessPauseDetector.INTERVAL_MS)
+                val elapsed = SystemClock.elapsedRealtime()
+                val uptime = SystemClock.uptimeMillis()
+                ProcessPauseDetector.classify(elapsed - lastElapsed, uptime - lastUptime)?.let { pause ->
+                    DiagnosticLogger.event(
+                        "process_paused",
+                        "kind" to pause.kind.name.lowercase(),
+                        "gapMs" to pause.gapMs,
+                        "awakeMs" to pause.awakeMs,
+                        "batteryOptimizationIgnored" to BackgroundProtection.isIgnoringBatteryOptimizations(this@ProxyService),
+                    )
+                }
+                lastElapsed = elapsed
+                lastUptime = uptime
+            }
+        }
     }
 
     override fun onDestroy() {

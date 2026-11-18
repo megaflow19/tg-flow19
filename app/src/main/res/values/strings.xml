@@ -107,6 +107,16 @@
     <string name="settings_restore_proxy_desc">The proxy remembers your last Start or Stop action. If you leave it enabled, it resumes after device startup. Tap Stop in the app, notification, or Quick Settings tile to keep it off.</string>
     <string name="settings_keep_cpu_awake">Keep device awake</string>
     <string name="settings_keep_cpu_awake_desc">Prevents deep sleep for the most reliable screen-off operation. Turning it off reduces idle power use.</string>
+    <string name="settings_battery_optimization">Battery optimization</string>
+    <string name="settings_battery_optimization_off">Off — the system will not put the proxy to sleep</string>
+    <string name="settings_battery_optimization_on">On — the system may freeze the proxy in the background</string>
+    <string name="settings_vendor_autostart">App launch (%1$s)</string>
+    <string name="settings_vendor_autostart_desc">Your phone maker\'s settings screen. Find this app in the list, turn off automatic management and allow auto-launch, secondary launch and running in the background.</string>
+    <string name="background_restricted_title">The proxy may fall asleep in the background</string>
+    <string name="background_restricted_message">Battery optimization is on for this app, so the system may freeze the proxy: Telegram stops connecting until you open the app. Turn battery optimization off; on Honor, Huawei, Xiaomi and others, also allow background running in the app launch settings.</string>
+    <string name="background_fix">Fix</string>
+    <string name="background_open">Open</string>
+    <string name="background_open_autostart">App launch</string>
     <string name="settings_preconnect_ws">Prepare WebSocket connections</string>
     <string name="settings_preconnect_ws_desc">Keeps direct connections ready for faster startup. When off, no prepared connections are used; the saved manual pool size is preserved.</string>
     <string name="settings_ws_ping_interval">WebSocket keepalive interval</string>

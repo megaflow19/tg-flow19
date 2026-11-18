@@ -28,7 +28,9 @@ import androidx.compose.ui.unit.dp
 import dev.minios.tgwsproxy.R
 import dev.minios.tgwsproxy.proxy.CfProxyDomains
 import dev.minios.tgwsproxy.proxy.ProxyConfig
+import dev.minios.tgwsproxy.ui.BackgroundProtectionRows
 import dev.minios.tgwsproxy.ui.icons.TablerIcons
+import dev.minios.tgwsproxy.ui.rememberBackgroundProtectionState
 import dev.minios.tgwsproxy.ui.theme.tgSwitchColors
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -629,6 +631,8 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    BackgroundProtectionRows(rememberBackgroundProtectionState())
                     Spacer(modifier = Modifier.height(12.dp))
 
                     SettingsSwitchRow(

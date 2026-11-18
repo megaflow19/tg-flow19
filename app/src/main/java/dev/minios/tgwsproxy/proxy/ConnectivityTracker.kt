@@ -43,17 +43,25 @@ class ConnectivityTracker(private val clock: () -> Long = { System.nanoTime() / 
     val state: StateFlow<ConnectivitySnapshot> = _state.asStateFlow()
     private val pending = mutableSetOf<AutoCloseable>()
 
-    fun updateNetwork(networkId: Long?, status: NetworkStatus): Boolean = synchronized(lock) {
-        val previous = _state.value
-        if (previous.stopped || (previous.networkId == networkId && previous.network == status)) return@synchronized false
-        closePending()
-        _state.value = ConnectivitySnapshot(previous.epoch + 1, networkId, status)
-        true
+    fun updateNetwork(networkId: Long?, status: NetworkStatus): Boolean {
+        val stale: List<AutoCloseable>
+        synchronized(lock) {
+            val previous = _state.value
+            if (previous.stopped || (previous.networkId == networkId && previous.network == status)) return false
+            stale = drainPending()
+            _state.value = ConnectivitySnapshot(previous.epoch + 1, networkId, status)
+        }
+        closeAll(stale)
+        return true
     }
 
-    fun stop() = synchronized(lock) {
-        closePending()
-        _state.value = ConnectivitySnapshot(epoch = _state.value.epoch + 1, stopped = true)
+    fun stop() {
+        val stale: List<AutoCloseable>
+        synchronized(lock) {
+            stale = drainPending()
+            _state.value = ConnectivitySnapshot(epoch = _state.value.epoch + 1, stopped = true)
+        }
+        closeAll(stale)
     }
 
     fun isCurrent(epoch: Long): Boolean = synchronized(lock) {
@@ -108,9 +116,21 @@ class ConnectivityTracker(private val clock: () -> Long = { System.nanoTime() / 
         _state.value = _state.value.copy(exhausted = _state.value.exhausted + target)
     }
 
-    private fun closePending() {
-        pending.forEach { try { it.close() } catch (_: Exception) {} }
+    /**
+     * Detaches pending resources under [lock]; the caller closes them after releasing it.
+     * Closing inside the iteration crashed with ConcurrentModificationException: a tracked
+     * socket's close() calls [releaseSocket], which re-enters the (reentrant) lock and
+     * removes itself from [pending]. Closing outside the lock also keeps slow TLS closes
+     * from blocking other connectivity callers.
+     */
+    private fun drainPending(): List<AutoCloseable> {
+        val stale = pending.toList()
         pending.clear()
+        return stale
+    }
+
+    private fun closeAll(resources: List<AutoCloseable>) {
+        resources.forEach { try { it.close() } catch (_: Exception) {} }
     }
 
     private fun pruneEvidence() {

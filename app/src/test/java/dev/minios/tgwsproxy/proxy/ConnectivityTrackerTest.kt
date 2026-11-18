@@ -213,6 +213,31 @@ class ConnectivityTrackerTest {
     }
 
     @Test
+    fun `resources that release themselves while closing do not break network change or stop`() {
+        // Mirrors CfH2Pool sockets: close() calls back into the tracker to release itself.
+        // Closing inside the pending-set iteration used to throw ConcurrentModificationException.
+        class SelfReleasing : AutoCloseable {
+            var closes = 0
+            override fun close() {
+                closes++
+                tracker.releaseResource(this)
+            }
+        }
+        tracker.updateNetwork(7, NetworkStatus.ONLINE)
+        val first = List(3) { SelfReleasing() }
+        first.forEach { assertTrue(tracker.trackResource(tracker.state.value.epoch, it)) }
+
+        assertTrue(tracker.updateNetwork(8, NetworkStatus.ONLINE))
+        first.forEach { assertEquals(1, it.closes) }
+
+        val second = List(3) { SelfReleasing() }
+        second.forEach { assertTrue(tracker.trackResource(tracker.state.value.epoch, it)) }
+        tracker.stop()
+        second.forEach { assertEquals(1, it.closes) }
+        first.forEach { assertEquals(1, it.closes) }
+    }
+
+    @Test
     fun `runtime stop clears evidence closes all pending sockets and cannot be revived`() {
         tracker.updateNetwork(7, NetworkStatus.ONLINE)
         val epoch = tracker.state.value.epoch

@@ -1,3 +1,27 @@
+# TG Flow19
+
+**TG Flow19** is a fork of [crim50n/tg-ws-proxy-android](https://github.com/crim50n/tg-ws-proxy-android)
+(TG WS Proxy, MIT), which is based on [Flowseal/tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy) (MIT).
+It is not affiliated with crim50n, Flowseal or Telegram.
+
+Changes in this fork so far:
+
+- **Cloudflare proxy route:** TLS SNI is the bare base domain, and `kwsN.<domain>` goes only in the
+  HTTP `Host` header. Fixes networks whose DPI drops handshakes with `kws*` SNI.
+- **Crash fix:** no more `ConcurrentModificationException` when the network changes.
+- **Frozen direct media:** when direct WebSocket media freezes on a network, the app remembers it for
+  that network and sends media through Cloudflare instead of hanging again after every restart.
+- **Background reliability:** guards against vendor power managers (Honor, Huawei, Xiaomi and others)
+  that freeze the proxy in the background: a battery-optimization prompt, a shortcut to the phone
+  maker's app launch settings, and freeze detection in diagnostics.
+- **Own app ID** `io.github.megaflow19.tgflow19`, so it installs alongside the original.
+
+> [!NOTE]
+> **No releases yet.** The download links, badges and screenshots below come from the original
+> TG WS Proxy README and point to crim50n's releases.
+
+---
+
 <p align="center">
   <a href="https://github.com/crim50n/tg-ws-proxy-android/releases/latest"><img src="https://img.shields.io/github/v/release/crim50n/tg-ws-proxy-android?style=flat-square&amp;label=release&amp;color=167DA7" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/Android-8.0%2B-167DA7?style=flat-square&amp;logo=android&amp;logoColor=white" alt="Android 8.0 or newer">

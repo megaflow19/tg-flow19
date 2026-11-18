@@ -6,14 +6,42 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DirectWsCircuitBreakerTest {
+    private val wifi = 101L
+    private val lte = 202L
+
     @Test
-    fun detectsRequestedMediaWithoutMeaningfulDownstreamData() {
+    fun detectsFrozenDownstreamAfterSilence() {
+        // Observed freeze: ~2.3 KB up, ~1.3 KB down shortly after the request, then nothing.
         assertTrue(
             DirectWsCircuitBreaker.isStalled(
                 pendingSince = 1_000L,
-                pendingBytesUp = 1_945L,
-                pendingBytesDown = 1_335L,
-                now = 17_000L,
+                lastDownAt = 1_200L,
+                pendingBytesUp = 2_307L,
+                pendingBytesDown = 1_300L,
+                now = 1_200L + DirectWsCircuitBreaker.STALL_SILENCE_MS,
+            )
+        )
+        assertFalse(
+            DirectWsCircuitBreaker.isStalled(
+                pendingSince = 1_000L,
+                lastDownAt = 1_200L,
+                pendingBytesUp = 2_307L,
+                pendingBytesDown = 1_300L,
+                now = 1_200L + DirectWsCircuitBreaker.STALL_SILENCE_MS - 1,
+            )
+        )
+    }
+
+    @Test
+    fun slowUploadThatKeepsReceivingAcksIsNotAStall() {
+        // 20 s into an upload, small acks still arriving: downstream is alive.
+        assertFalse(
+            DirectWsCircuitBreaker.isStalled(
+                pendingSince = 1_000L,
+                lastDownAt = 20_000L,
+                pendingBytesUp = 900_000L,
+                pendingBytesDown = 2_000L,
+                now = 21_000L,
             )
         )
     }
@@ -22,91 +50,89 @@ class DirectWsCircuitBreakerTest {
     fun ignoresSmallRequestsAndMeaningfulMediaResponses() {
         assertFalse(
             DirectWsCircuitBreaker.isStalled(
-                pendingSince = 1_000L,
-                pendingBytesUp = 420L,
-                pendingBytesDown = 205L,
-                now = 61_000L,
+                pendingSince = 1_000L, lastDownAt = 0L,
+                pendingBytesUp = 420L, pendingBytesDown = 205L, now = 61_000L,
             )
         )
         assertFalse(
             DirectWsCircuitBreaker.isStalled(
-                pendingSince = 1_000L,
-                pendingBytesUp = 1_945L,
-                pendingBytesDown = 4_096L,
-                now = 61_000L,
+                pendingSince = 1_000L, lastDownAt = 0L,
+                pendingBytesUp = 1_945L, pendingBytesDown = 4_096L, now = 61_000L,
             )
         )
     }
 
     @Test
-    fun firstStallTemporarilyBlocksOnlyAffectedSlot() {
+    fun oneMediaStallMovesAllMediaOnThatNetworkForTheBlockDuration() {
         var now = 1_000L
         val breaker = DirectWsCircuitBreaker { now }
 
-        val first = breaker.recordStall(dc = 2, isMedia = true)
+        val first = breaker.recordStall(wifi, isMedia = true)
         assertEquals(1, first.strikes)
         assertTrue(first.activated)
-        assertEquals(DirectWsCircuitBreaker.RETRY_BLOCK_DURATION_MS, first.blockedForMs)
-        assertTrue(breaker.isBlocked(dc = 2, isMedia = true))
-        assertFalse(breaker.isBlocked(dc = 2, isMedia = false))
-        assertFalse(breaker.isBlocked(dc = 4, isMedia = true))
+        assertEquals(DirectWsCircuitBreaker.NETWORK_BLOCK_DURATION_MS, first.blockedForMs)
+        assertTrue(breaker.isBlocked(wifi, isMedia = true))
+        assertFalse(breaker.isBlocked(wifi, isMedia = false))
 
-        now += first.blockedForMs
-        assertFalse(breaker.isBlocked(dc = 2, isMedia = true))
+        now += first.blockedForMs - 1
+        assertTrue(breaker.isBlocked(wifi, isMedia = true))
+        now += 1
+        assertFalse(breaker.isBlocked(wifi, isMedia = true))
     }
 
     @Test
-    fun secondStallAfterDirectRetryActivatesLongOverride() {
+    fun anotherNetworkStartsClean() {
+        val breaker = DirectWsCircuitBreaker { 1_000L }
+        breaker.recordStall(wifi, isMedia = true)
+        assertFalse(breaker.isBlocked(lte, isMedia = true))
+        assertFalse(breaker.isBlocked(null, isMedia = true))
+        assertTrue(breaker.isBlocked(wifi, isMedia = true))
+    }
+
+    @Test
+    fun memorySurvivesRuntimeRestartBecauseBridgesShareTheBreaker() {
+        // Runtime restarts recreate ConnectivityTracker/Bridge; the breaker instance is shared.
+        val breaker = DirectWsCircuitBreaker { 1_000L }
+        Bridge(ConnectivityTracker(), breaker).resetState()
+        breaker.recordStall(wifi, isMedia = true)
+        Bridge(ConnectivityTracker(), breaker).resetState()
+        assertTrue(breaker.isBlocked(wifi, isMedia = true))
+    }
+
+    @Test
+    fun repeatedStallDuringActiveBlockDoesNotExtendOrRecount() {
         var now = 1_000L
         val breaker = DirectWsCircuitBreaker { now }
-        val first = breaker.recordStall(dc = 4, isMedia = true)
+        breaker.recordStall(wifi, isMedia = true)
+        now += 60_000L
+        val again = breaker.recordStall(wifi, isMedia = true)
+        assertFalse(again.activated)
+        assertEquals(1, again.strikes)
+        assertEquals(DirectWsCircuitBreaker.NETWORK_BLOCK_DURATION_MS - 60_000L, again.blockedForMs)
+    }
+
+    @Test
+    fun stallAfterExpiryBlocksAgainAndCountsStrike() {
+        var now = 1_000L
+        val breaker = DirectWsCircuitBreaker { now }
+        val first = breaker.recordStall(wifi, isMedia = true)
         now += first.blockedForMs
-
-        val second = breaker.recordStall(dc = 4, isMedia = true)
-
-        assertEquals(2, second.strikes)
+        val second = breaker.recordStall(wifi, isMedia = true)
         assertTrue(second.activated)
-        assertTrue(second.blockedForMs > DirectWsCircuitBreaker.RETRY_BLOCK_DURATION_MS)
-        assertTrue(breaker.isBlocked(dc = 4, isMedia = true))
+        assertEquals(2, second.strikes)
+        assertTrue(breaker.isBlocked(wifi, isMedia = true))
     }
 
     @Test
-    fun responsiveDirectRetryClearsFirstStrike() {
+    fun responsiveSessionKeepsActiveBlockButClearsExpiredHistory() {
         var now = 1_000L
         val breaker = DirectWsCircuitBreaker { now }
+        val first = breaker.recordStall(wifi, isMedia = true)
+        breaker.recordResponsive(wifi, isMedia = true)
+        assertTrue(breaker.isBlocked(wifi, isMedia = true))
 
-        val first = breaker.recordStall(dc = 4, isMedia = true)
         now += first.blockedForMs
-        breaker.recordResponsive(dc = 4, isMedia = true)
-
-        assertEquals(1, breaker.recordStall(dc = 4, isMedia = true).strikes)
-    }
-
-    @Test
-    fun activeOverrideSurvivesOtherResponsiveSessionAndExpires() {
-        var now = 1_000L
-        val breaker = DirectWsCircuitBreaker { now }
-        val first = breaker.recordStall(dc = 2, isMedia = true)
-        now += first.blockedForMs
-        val activated = breaker.recordStall(dc = 2, isMedia = true)
-
-        breaker.recordResponsive(dc = 2, isMedia = true)
-        assertTrue(breaker.isBlocked(dc = 2, isMedia = true))
-
-        now += activated.blockedForMs
-        assertFalse(breaker.isBlocked(dc = 2, isMedia = true))
-    }
-
-    @Test
-    fun oldStrikeDoesNotActivateOverride() {
-        var now = 1_000L
-        val breaker = DirectWsCircuitBreaker { now }
-        breaker.recordStall(dc = 2, isMedia = true)
-
-        now += DirectWsCircuitBreaker.STRIKE_WINDOW_MS + 1
-
-        val result = breaker.recordStall(dc = 2, isMedia = true)
-        assertEquals(1, result.strikes)
-        assertEquals(DirectWsCircuitBreaker.RETRY_BLOCK_DURATION_MS, result.blockedForMs)
+        breaker.recordResponsive(wifi, isMedia = true)
+        assertEquals(1, breaker.recordStall(wifi, isMedia = true).strikes)
     }
 }

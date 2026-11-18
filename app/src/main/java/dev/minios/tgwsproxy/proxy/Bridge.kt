@@ -72,7 +72,13 @@ internal class CfCooldownTracker(
  * - TCP fallback using standard DC IPs (not WS redirect IPs)
  * - Per-session stats (up/down bytes/packets, duration)
  */
-class Bridge(private val connectivity: ConnectivityTracker) {
+class Bridge internal constructor(
+    private val connectivity: ConnectivityTracker,
+    // Process-wide by default: must survive runtime restarts (see DirectWsCircuitBreaker).
+    private val directWsCircuitBreaker: DirectWsCircuitBreaker,
+) {
+    constructor(connectivity: ConnectivityTracker) : this(connectivity, DirectWsCircuitBreaker.shared)
+
     private val cfDnsResolver = CfDnsResolver()
     private val h2Pool = CfH2Pool(connectivity)
 
@@ -135,7 +141,6 @@ class Bridge(private val connectivity: ConnectivityTracker) {
     private val dcFailUntil = ConcurrentHashMap<String, Long>()
     private val directIpFailUntil = ConcurrentHashMap<String, Long>()
     private val cfCooldowns = CfCooldownTracker()
-    private val directWsCircuitBreaker = DirectWsCircuitBreaker()
     private val pendingSockets = ConcurrentHashMap.newKeySet<Socket>()
     private val workerRetryAfter = ConcurrentHashMap<String, Long>()
     private val activeWorkers = ConcurrentHashMap<Int, String>()
@@ -152,7 +157,8 @@ class Bridge(private val connectivity: ConnectivityTracker) {
         directIpFailUntil.clear()
         cfCooldowns.reset()
         cfDnsResolver.reset()
-        directWsCircuitBreaker.reset()
+        // directWsCircuitBreaker is deliberately kept: it is scoped to the Android network,
+        // and runtime restarts on the same network must not forget a frozen direct path.
         h2Pool.reset()
         workerRetryAfter.clear()
         activeWorkers.clear()
@@ -213,7 +219,7 @@ class Bridge(private val connectivity: ConnectivityTracker) {
         var adaptiveCfFirst = false
         connectivity.recordIfCurrent(epoch) {
             adaptiveCfFirst = !config.forceTestDc && config.autoOptimizeConnection && config.cfProxyEnabled &&
-                    directWsCircuitBreaker.isBlocked(dc, isMedia)
+                    directWsCircuitBreaker.isBlocked(connectivity.state.value.networkId, isMedia)
         }
         val cfAttempted = !config.forceTestDc && config.cfProxyEnabled && (config.cfProxyFirst || adaptiveCfFirst)
 
@@ -706,6 +712,7 @@ class Bridge(private val connectivity: ConnectivityTracker) {
         var pendingSince = 0L
         var pendingBytes = 0L
         var pendingDownBytes = 0L
+        var pendingLastDownAt = 0L
         val stalled = AtomicBoolean(false)
 
         fun markDirectRequest(bytes: Int) {
@@ -717,18 +724,22 @@ class Bridge(private val connectivity: ConnectivityTracker) {
 
         fun markDirectResponse(bytes: Int) {
             val meaningful = synchronized(pendingLock) {
-                if (pendingSince > 0L) pendingDownBytes += bytes
+                if (pendingSince > 0L) {
+                    pendingDownBytes += bytes
+                    pendingLastDownAt = System.currentTimeMillis()
+                }
                 if (pendingDownBytes >= DirectWsCircuitBreaker.MIN_MEANINGFUL_DOWN_BYTES) {
                     pendingSince = 0L
                     pendingBytes = 0L
                     pendingDownBytes = 0L
+                    pendingLastDownAt = 0L
                     true
                 } else {
                     false
                 }
             }
             if (meaningful) connectivity.recordIfCurrent(epoch) {
-                directWsCircuitBreaker.recordResponsive(dc, isMedia)
+                directWsCircuitBreaker.recordResponsive(connectivity.state.value.networkId, isMedia)
             }
         }
 
@@ -777,6 +788,7 @@ class Bridge(private val connectivity: ConnectivityTracker) {
                     val stalledTraffic = synchronized(pendingLock) {
                         if (DirectWsCircuitBreaker.isStalled(
                                 pendingSince = pendingSince,
+                                lastDownAt = pendingLastDownAt,
                                 pendingBytesUp = pendingBytes,
                                 pendingBytesDown = pendingDownBytes,
                                 now = now,
@@ -792,7 +804,7 @@ class Bridge(private val connectivity: ConnectivityTracker) {
                     var result: DirectWsStallResult? = null
                     connectivity.recordIfCurrent(epoch, requireInternet = true) {
                         if (stalled.compareAndSet(false, true)) {
-                            result = directWsCircuitBreaker.recordStall(dc, isMedia)
+                            result = directWsCircuitBreaker.recordStall(connectivity.state.value.networkId, isMedia)
                         }
                     }
                     val recorded = result ?: continue
@@ -805,6 +817,7 @@ class Bridge(private val connectivity: ConnectivityTracker) {
                         "strikes" to recorded.strikes,
                         "overrideActivated" to recorded.activated,
                         "blockedForMs" to recorded.blockedForMs,
+                        "scope" to "network-media",
                     )
                     Log.w(TAG, "DC$dc$mediaTag direct WS stalled; closing session (strike ${recorded.strikes})")
                     upstream.ws?.abort()

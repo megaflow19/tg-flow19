@@ -17,8 +17,9 @@ Changes in this fork so far:
 - **Own app ID** `io.github.megaflow19.tgflow19`, so it installs alongside the original.
 
 > [!NOTE]
-> **No releases yet.** The download links, badges and screenshots below come from the original
-> TG WS Proxy README and point to crim50n's releases.
+> **No releases yet.** Everything below this line is the original TG WS Proxy README by crim50n:
+> the cover illustration and screenshots are crim50n's (TG WS Proxy v2.0.0, MIT) and show the
+> original app, and the badges and download links point to crim50n's releases.
 
 ---
 

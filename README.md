@@ -13,10 +13,22 @@ It is not affiliated with crim50n, Flowseal or Telegram.
 - Release APKs are signed with this certificate (SHA-256):
   `59:ED:87:B6:4A:D0:C7:DE:03:D3:82:B0:D9:59:4D:52:E5:15:BD:AB:67:7B:59:A7:F6:35:90:CF:8E:30:D3:F3`
 
+## First start
+
+1. Open the app and follow the **first-time setup**: notifications, battery optimization, the phone
+   maker's app launch settings and connecting Telegram (also in Settings → Support).
+2. Delete old entries of this proxy in Telegram, then fully close Telegram (swipe it away in your
+   recent apps) and open it again.
+3. On networks that block the usual Cloudflare addresses, the first connection can take up to about
+   30 seconds while the app finds another route; then it is remembered for that network.
+
 ## Changes from TG WS Proxy
 
+- **Alternate Cloudflare addresses:** when the usual Cloudflare address for the proxy domains does
+  not respond, the app finds another Cloudflare address that works and remembers it per network.
 - **Cloudflare proxy route:** TLS SNI is the bare base domain, and `kwsN.<domain>` goes only in the
   HTTP `Host` header. Fixes networks whose DPI drops handshakes with `kws*` SNI.
+- **First-time setup** wizard and a status line message while another route is searched.
 - **Crash fix:** no more `ConcurrentModificationException` when the network changes.
 - **Frozen direct media:** when direct WebSocket media freezes on a network, the app remembers it for
   that network and sends media through Cloudflare instead of hanging again after every restart.

@@ -280,4 +280,23 @@
     <string name="settings_proxy_protocol">Require PROXY protocol v1</string>
     <string name="settings_proxy_protocol_desc">Only behind a trusted L4 proxy sending a PROXY v1 header. Direct Telegram connections will not work when enabled.</string>
     <string name="validation_domain_list">Enter up to 32 valid hostnames, separated by lines or commas; do not include schemes, ports or paths.</string>
+    <string name="setup_title">First-time setup</string>
+    <string name="setup_intro">A few steps so the proxy works reliably and does not fall asleep in the background. Completed steps are checked automatically. You can come back here from Settings.</string>
+    <string name="setup_notifications_title">Notifications</string>
+    <string name="setup_notifications_text">The proxy runs as a background service with a notification. Without this permission, Android may stop it without you noticing.</string>
+    <string name="setup_allow">Allow</string>
+    <string name="setup_battery_title">Battery optimization</string>
+    <string name="setup_battery_text">Turn it off for this app. Otherwise the system may freeze the proxy in the background, and Telegram stops connecting until you open the app.</string>
+    <string name="setup_vendor_title">App launch (%1$s)</string>
+    <string name="setup_vendor_text">Your phone maker\'s settings screen. Find this app in the list, turn off automatic management and allow auto-launch, secondary launch and running in the background. The app cannot check this, so mark the step yourself.</string>
+    <string name="setup_mark_done">Done</string>
+    <string name="setup_telegram_title">Connect Telegram</string>
+    <string name="setup_telegram_text">The button starts the proxy and opens Telegram to add it. If Telegram still has old entries for this proxy (for example, from a previous install), delete them, then fully close Telegram by swiping it away in your recent apps, and open it again.</string>
+    <string name="setup_telegram_action">Add to Telegram</string>
+    <string name="setup_more_title">More</string>
+    <string name="setup_more_text">Route checks and Cloudflare domain list updates are already on. If messages arrive late while the screen is off, turn on “Keep device awake” in Settings → Power usage; it uses more battery. The theme and detailed statistics are in Settings too.</string>
+    <string name="setup_finish">Finish</string>
+    <string name="setup_status_done">Done</string>
+    <string name="setup_status_todo">To do</string>
+    <string name="settings_setup_desc">Notifications, battery, background running and connecting Telegram.</string>
 </resources>

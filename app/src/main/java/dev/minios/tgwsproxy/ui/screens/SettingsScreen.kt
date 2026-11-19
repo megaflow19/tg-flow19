@@ -45,6 +45,7 @@ fun SettingsScreen(
     onTestCfProxy: () -> Unit,
     onAppearanceChange: (String, Boolean) -> Unit,
     onOpenLogs: () -> Unit,
+    onOpenSetup: () -> Unit,
 ) {
     var host by remember { mutableStateOf(config.host) }
     var port by remember { mutableStateOf(config.port.toString()) }
@@ -743,6 +744,45 @@ fun SettingsScreen(
                     }
                 }
                 SettingsSection(title = stringResource(R.string.settings_support)) {
+                    Row(
+                        modifier =
+                            Modifier.fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable(role = Role.Button, onClick = onOpenSetup)
+                                .heightIn(min = 48.dp)
+                                .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Icon(
+                            TablerIcons.PlayerPlay,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.setup_title),
+                                modifier = Modifier.fillMaxWidth(),
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Text(
+                                text = stringResource(R.string.settings_setup_desc),
+                                modifier = Modifier.fillMaxWidth(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Icon(
+                            TablerIcons.ArrowLeft,
+                            contentDescription = null,
+                            modifier = Modifier.rotate(180f),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     Row(
                         modifier =
                             Modifier.fillMaxWidth()

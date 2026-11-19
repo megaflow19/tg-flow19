@@ -31,6 +31,9 @@ import dev.minios.tgwsproxy.ui.screens.SettingsScreen
 import dev.minios.tgwsproxy.ui.screens.AboutScreen
 import dev.minios.tgwsproxy.ui.screens.HelpScreen
 import dev.minios.tgwsproxy.ui.screens.LogScreen
+import dev.minios.tgwsproxy.ui.screens.SetupScreen
+import dev.minios.tgwsproxy.data.SetupPreferences
+import dev.minios.tgwsproxy.service.ProxyServiceState
 import dev.minios.tgwsproxy.ui.theme.TgWsProxyTheme
 
 class MainActivity : ComponentActivity() {
@@ -44,7 +47,43 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (!granted) {
-            Toast.makeText(this, R.string.notification_permission_required, Toast.LENGTH_LONG).show()
+            // Denied for good (the system no longer shows the dialog): from the setup wizard,
+            // send the user to the app's notification settings instead of doing nothing.
+            if (notificationRequestFromSetup && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                !shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)
+            ) {
+                openNotificationSettings()
+            } else {
+                Toast.makeText(this, R.string.notification_permission_required, Toast.LENGTH_LONG).show()
+            }
+        }
+        notificationRequestFromSetup = false
+    }
+    private var notificationRequestFromSetup = false
+
+    /** Setup wizard step: ask for the permission, or open notification settings if it can't be asked. */
+    internal fun requestNotificationsFromSetup() {
+        val needsRuntimePermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        if (needsRuntimePermission) {
+            notificationRequestFromSetup = true
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            openNotificationSettings()
+        }
+    }
+
+    private fun openNotificationSettings() {
+        val intent = Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+            .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName)
+        try {
+            startActivity(intent)
+        } catch (_: Exception) {
+            startActivity(
+                Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                    .setData(android.net.Uri.parse("package:$packageName"))
+            )
         }
     }
 
@@ -53,8 +92,9 @@ class MainActivity : ComponentActivity() {
         pendingUpdateOpen = savedInstanceState?.getBoolean("pending_update_open") ?: false
         consumeUpdateIntent(intent)
 
-        // Request notification permission on Android 13+
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        // Request notification permission on Android 13+. Until first-run setup is done, the
+        // setup wizard asks for it as its first step instead, so the dialog is not shown twice.
+        if (SetupPreferences(this).completed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(
                     this, Manifest.permission.POST_NOTIFICATIONS
                 ) != PackageManager.PERMISSION_GRANTED
@@ -77,7 +117,11 @@ class MainActivity : ComponentActivity() {
                 dynamicColor = config.dynamicColor,
             ) {
                 if (configLoaded) {
-                    AppNavigation(viewModel, pendingUpdateOpen) { pendingUpdateOpen = false }
+                    AppNavigation(
+                        viewModel, pendingUpdateOpen,
+                        onUpdateOpened = { pendingUpdateOpen = false },
+                        onRequestNotifications = ::requestNotificationsFromSetup,
+                    )
                 } else {
                     androidx.compose.foundation.layout.Box(
                         modifier = androidx.compose.ui.Modifier.fillMaxSize(),
@@ -110,7 +154,12 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun AppNavigation(viewModel: MainViewModel, pendingUpdateOpen: Boolean, onUpdateOpened: () -> Unit) {
+private fun AppNavigation(
+    viewModel: MainViewModel,
+    pendingUpdateOpen: Boolean,
+    onUpdateOpened: () -> Unit,
+    onRequestNotifications: () -> Unit,
+) {
     val config by viewModel.config.collectAsState()
     val serviceState by viewModel.serviceState.collectAsState()
     val proxyEnabled by viewModel.proxyEnabled.collectAsState()
@@ -134,7 +183,11 @@ private fun AppNavigation(viewModel: MainViewModel, pendingUpdateOpen: Boolean, 
         }
     }
 
-    var currentScreen by rememberSaveable { mutableStateOf(Screen.Main) }
+    // First launch opens the setup wizard; from Settings it returns to Settings.
+    var currentScreen by rememberSaveable {
+        mutableStateOf(if (SetupPreferences(context).completed) Screen.Main else Screen.Setup)
+    }
+    var setupFromSettings by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(pendingUpdateOpen, currentScreen) {
         // Keep the current Settings draft and its normal save/restart exit path intact.
         if (pendingUpdateOpen && currentScreen != Screen.Settings && currentScreen != Screen.Logs) {
@@ -206,6 +259,26 @@ private fun AppNavigation(viewModel: MainViewModel, pendingUpdateOpen: Boolean, 
                     viewModel.updateAppearance(appTheme, dynamicColor)
                 },
                 onOpenLogs = { currentScreen = Screen.Logs },
+                onOpenSetup = {
+                    setupFromSettings = true
+                    currentScreen = Screen.Setup
+                },
+            )
+        }
+        Screen.Setup -> {
+            val leaveSetup = {
+                currentScreen = if (setupFromSettings) Screen.Settings else Screen.Main
+                setupFromSettings = false
+            }
+            if (setupFromSettings) BackHandler { leaveSetup() }
+            SetupScreen(
+                onRequestNotifications = onRequestNotifications,
+                onConnectTelegram = {
+                    if (serviceState == ProxyServiceState.STOPPED) viewModel.startProxy()
+                    viewModel.openInTelegram()
+                },
+                onDone = leaveSetup,
+                showBack = setupFromSettings,
             )
         }
         Screen.About -> {
@@ -234,4 +307,4 @@ private fun AppNavigation(viewModel: MainViewModel, pendingUpdateOpen: Boolean, 
     }
 }
 
-private enum class Screen { Main, Settings, About, Logs, Help }
+private enum class Screen { Main, Settings, About, Logs, Help, Setup }

@@ -41,17 +41,11 @@ Release notes: [`release-notes/`](release-notes/) (crim50n's original notes are 
 [`release-notes/upstream/`](release-notes/upstream/)).
 
 > [!NOTE]
-> Everything below this line is the original TG WS Proxy README by crim50n: the cover illustration
-> and screenshots are crim50n's (TG WS Proxy v2.0.0, MIT) and show the original app, and the badges
-> and download links point to crim50n's releases, not to TG Flow19.
+> Everything below this line is the original TG WS Proxy README by crim50n, kept for its
+> description of the app. The cover illustration and screenshots are crim50n's (TG WS Proxy v2.0.0,
+> MIT) and show the original app. Download and issue links have been changed to point to TG Flow19.
 
 ---
-
-<p align="center">
-  <a href="https://github.com/crim50n/tg-ws-proxy-android/releases/latest"><img src="https://img.shields.io/github/v/release/crim50n/tg-ws-proxy-android?style=flat-square&amp;label=release&amp;color=167DA7" alt="Latest release"></a>
-  <img src="https://img.shields.io/badge/Android-8.0%2B-167DA7?style=flat-square&amp;logo=android&amp;logoColor=white" alt="Android 8.0 or newer">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-167DA7?style=flat-square" alt="MIT license"></a>
-</p>
 
 <p align="center">
   <img src="screenshots/2.0.0/cover.jpg" width="100%" alt="An illustrated terrace with a visual connection from Android through WebSocket to Telegram">
@@ -63,12 +57,6 @@ Release notes: [`release-notes/`](release-notes/) (crim50n's original notes are 
   <strong>A local bridge to Telegram, right on your Android.</strong><br>
   MTProto over WebSocket, with Cloudflare and direct TCP fallback.<br>
   No root. No separate server to deploy. No ads or analytics.
-</p>
-
-<p align="center">
-  <a href="https://github.com/crim50n/tg-ws-proxy-android/releases/latest"><img src="https://img.shields.io/badge/Download-APK-167DA7?style=for-the-badge&amp;logo=android&amp;logoColor=white&amp;labelColor=167DA7" alt="Download APK"></a>
-  <a href="#quick-start"><img src="https://img.shields.io/badge/Quick_start-263746?style=for-the-badge" alt="Quick start"></a>
-  <a href="release-notes/"><img src="https://img.shields.io/badge/Release_notes-263746?style=for-the-badge" alt="Release notes"></a>
 </p>
 
 ## Simple to Use. Flexible When Needed.
@@ -113,7 +101,7 @@ Release notes: [`release-notes/`](release-notes/) (crim50n's original notes are 
 
 ## Quick Start
 
-1. [Install the latest APK](https://github.com/crim50n/tg-ws-proxy-android/releases/latest)
+1. [Install the latest APK](https://github.com/megaflow19/tg-flow19/releases/latest)
    on Android 8.0 or newer.
 2. Open the app and tap **Connect**.
 3. Tap **Open in Telegram**, then confirm and select the proxy.
@@ -139,7 +127,7 @@ published SHA-256 checksum, package identity, version, and installed signing
 certificate before Android asks you to confirm installation.
 
 For connection problems, start with the built-in **Help**. If the problem persists,
-[open an issue](https://github.com/crim50n/tg-ws-proxy-android/issues) with your
+[open an issue](https://github.com/megaflow19/tg-flow19/issues) with your
 Android version, network type, and steps to reproduce. Diagnostic reports are
 available under **Settings → Support and diagnostics**; review them before sharing,
 even though recognized sensitive data is redacted.

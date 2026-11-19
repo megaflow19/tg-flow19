@@ -21,7 +21,7 @@ android {
         applicationId = "io.github.megaflow19.tgflow19"
         minSdk = 26
         targetSdk = 34
-        // versionCode = major*10000 + minor*100 + patch (1.0.0 -> 10000); must match update.json.
+        // Version code scheme: major*10000 + minor*100 + patch (1.0.0 -> 10000); must match update.json.
         versionCode = 10000
         versionName = "1.0.0"
     }

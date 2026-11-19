@@ -43,16 +43,23 @@ android {
         buildTypes.getByName("release").signingConfig = signingConfigs.getByName("release")
     }
 
+    // Build stamp (Moscow time) to tell test builds apart in About and diagnostics.
+    // Update checks compare versionCode, not versionName, so the suffix is harmless there.
+    val buildStamp = LocalDateTime.now(ZoneId.of("Europe/Moscow"))
+        .format(DateTimeFormatter.ofPattern("MMdd-HHmm"))
+
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
-            // Build stamp (Moscow time) to tell debug builds apart in About and diagnostics,
-            // e.g. 1.0.0-dev.1119-0130. Update checks compare versionCode, not this name.
-            versionNameSuffix = "-dev." + LocalDateTime.now(ZoneId.of("Europe/Moscow"))
-                .format(DateTimeFormatter.ofPattern("MMdd-HHmm"))
+            versionNameSuffix = "-dev.$buildStamp" // e.g. 1.0.0-dev.1119-0130
             manifestPlaceholders["appLabel"] = "TG Flow19 Dev"
         }
         release {
+            // Local signed builds get -local.<stamp>; GitHub Actions releases keep the plain
+            // versionName so it matches the tag (Obtainium compares them).
+            if (System.getenv("GITHUB_ACTIONS") != "true") {
+                versionNameSuffix = "-local.$buildStamp" // e.g. 1.0.0-local.1119-0235
+            }
             manifestPlaceholders["appLabel"] = "@string/app_name"
             isMinifyEnabled = true
             isShrinkResources = true

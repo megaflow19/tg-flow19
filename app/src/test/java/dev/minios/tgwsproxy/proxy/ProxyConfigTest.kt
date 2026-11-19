@@ -17,8 +17,9 @@ class ProxyConfigTest {
         assertEquals(true, config.autoOptimizeConnection)
         assertEquals(false, config.keepCpuAwake)
         assertEquals(false, config.preconnectWebSockets)
-        assertEquals(false, config.routeProbesEnabled)
-        assertEquals(false, config.cfDomainRefreshEnabled)
+        // TG Flow19: on by default (crim50n had them off), see DEFAULT_POWER_PROFILE.
+        assertEquals(true, config.routeProbesEnabled)
+        assertEquals(true, config.cfDomainRefreshEnabled)
         assertEquals(180, config.webSocketPingIntervalSeconds)
         assertEquals(RuntimeRouteMode.WS_CF_TCP, config.runtimeRouteMode())
     }

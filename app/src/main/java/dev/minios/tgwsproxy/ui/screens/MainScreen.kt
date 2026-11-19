@@ -366,6 +366,7 @@ private fun ConnectivityCard(snapshot: ConnectivitySnapshot) {
             ConnectionSummary.RETRYING -> R.string.connectivity_retrying
             ConnectionSummary.UNREACHABLE -> R.string.connectivity_unreachable
             ConnectionSummary.DEGRADED -> R.string.connectivity_degraded
+            ConnectionSummary.SEARCHING_ALTERNATE_ROUTE -> R.string.connectivity_searching_alternate
         }
     Card(
         modifier = Modifier.fillMaxWidth(),

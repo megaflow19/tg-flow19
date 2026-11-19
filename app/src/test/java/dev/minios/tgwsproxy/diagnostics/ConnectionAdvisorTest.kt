@@ -239,8 +239,8 @@ class ConnectionAdvisorTest {
 
         assertEquals(true, requiresProxyRestart(config, config.copy(keepCpuAwake = true)))
         assertEquals(true, requiresProxyRestart(config, config.copy(preconnectWebSockets = true)))
-        assertEquals(true, requiresProxyRestart(config, config.copy(routeProbesEnabled = true)))
-        assertEquals(true, requiresProxyRestart(config, config.copy(cfDomainRefreshEnabled = true)))
+        assertEquals(true, requiresProxyRestart(config, config.copy(routeProbesEnabled = !config.routeProbesEnabled)))
+        assertEquals(true, requiresProxyRestart(config, config.copy(cfDomainRefreshEnabled = !config.cfDomainRefreshEnabled)))
         assertEquals(true, requiresProxyRestart(config, config.copy(webSocketPingIntervalSeconds = 90)))
         assertEquals(true, requiresProxyRestart(config, config.copy(showTrafficInNotification = false)))
     }

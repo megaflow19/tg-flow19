@@ -32,11 +32,17 @@ internal val LEGACY_DEFAULT_POWER_PROFILE = PowerProfile(
     webSocketPingIntervalSeconds = 30,
 )
 
-internal val BATTERY_SAVING_DEFAULT_POWER_PROFILE = PowerProfile(
+/**
+ * Defaults for new installs. Like crim50n's battery-saving profile (no CPU wake lock, no
+ * prepared sockets, 180 s pings), except that route probes and the shared Cloudflare domain
+ * list refresh are on: on filtered networks they find a working route after start and network
+ * changes, and keep the domain list current (TG Flow19 decision, 2026-11-19).
+ */
+internal val DEFAULT_POWER_PROFILE = PowerProfile(
     keepCpuAwake = false,
     preconnectWebSockets = false,
-    routeProbesEnabled = false,
-    cfDomainRefreshEnabled = false,
+    routeProbesEnabled = true,
+    cfDomainRefreshEnabled = true,
     webSocketPingIntervalSeconds = 180,
 )
 
@@ -52,7 +58,7 @@ internal fun resolvePowerProfileMigration(
     val migrateLegacyDefaults = existingInstall && current == LEGACY_DEFAULT_POWER_PROFILE
     return PowerProfileMigration(
         profile = if (!existingInstall || migrateLegacyDefaults) {
-            BATTERY_SAVING_DEFAULT_POWER_PROFILE
+            DEFAULT_POWER_PROFILE
         } else {
             current
         },
@@ -172,8 +178,8 @@ class ConfigRepository(private val context: Context) {
             autoOptimizeConnection = prefs[Keys.AUTO_OPTIMIZE_CONNECTION] ?: true,
             keepCpuAwake = prefs[Keys.KEEP_CPU_AWAKE] ?: false,
             preconnectWebSockets = prefs[Keys.PRECONNECT_WEBSOCKETS] ?: false,
-            routeProbesEnabled = prefs[Keys.ROUTE_PROBES_ENABLED] ?: false,
-            cfDomainRefreshEnabled = prefs[Keys.CF_DOMAIN_REFRESH_ENABLED] ?: false,
+            routeProbesEnabled = prefs[Keys.ROUTE_PROBES_ENABLED] ?: DEFAULT_POWER_PROFILE.routeProbesEnabled,
+            cfDomainRefreshEnabled = prefs[Keys.CF_DOMAIN_REFRESH_ENABLED] ?: DEFAULT_POWER_PROFILE.cfDomainRefreshEnabled,
             webSocketPingIntervalSeconds = (prefs[Keys.WS_PING_INTERVAL_SECONDS] ?: 180).coerceIn(30, 300),
             showTrafficInNotification = prefs[Keys.SHOW_TRAFFIC_IN_NOTIFICATION] ?: true,
             cfProxyUserDomain = prefs[Keys.CF_PROXY_USER_DOMAIN]

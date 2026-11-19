@@ -40,6 +40,7 @@
     <string name="connectivity_retrying">Повторяем подключение…</string>
     <string name="connectivity_unreachable">Не удаётся подключиться к Telegram.</string>
     <string name="connectivity_degraded">Некоторые подключения Telegram недоступны.</string>
+    <string name="connectivity_searching_alternate">Обычный адрес Cloudflare не отвечает. Ищем обходной путь… Это может занять до 30 секунд.</string>
 
     <!-- Stats -->
     <string name="stats_connections">Соединения</string>

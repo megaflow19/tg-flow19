@@ -213,6 +213,25 @@ class ConnectivityTrackerTest {
     }
 
     @Test
+    fun `alternate route search flag counts overlapping searches and survives network change`() {
+        tracker.updateNetwork(7, NetworkStatus.ONLINE)
+        tracker.beginAlternateRouteSearch()
+        tracker.beginAlternateRouteSearch()
+        assertTrue(tracker.state.value.searchingAlternateRoute)
+        tracker.endAlternateRouteSearch()
+        assertTrue("one search still running", tracker.state.value.searchingAlternateRoute)
+
+        tracker.updateNetwork(8, NetworkStatus.ONLINE)
+        assertTrue("old dial ends itself later", tracker.state.value.searchingAlternateRoute)
+        tracker.endAlternateRouteSearch()
+        assertFalse(tracker.state.value.searchingAlternateRoute)
+
+        tracker.endAlternateRouteSearch() // extra end never goes negative
+        tracker.beginAlternateRouteSearch()
+        assertTrue(tracker.state.value.searchingAlternateRoute)
+    }
+
+    @Test
     fun `resources that release themselves while closing do not break network change or stop`() {
         // Mirrors CfH2Pool sockets: close() calls back into the tracker to release itself.
         // Closing inside the pending-set iteration used to throw ConcurrentModificationException.

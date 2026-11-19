@@ -27,6 +27,8 @@ data class ConnectivitySnapshot(
     val exhausted: Set<RouteTarget> = emptySet(),
     val stopped: Boolean = false,
     val evidenceStartedAt: Long = 0,
+    /** A CF proxy connection is trying alternate Cloudflare edges (see CfEdgeRouter). */
+    val searchingAlternateRoute: Boolean = false,
 ) {
     val allowsTraffic: Boolean get() = !stopped && network in setOf(
         NetworkStatus.UNKNOWN, NetworkStatus.UNVERIFIED, NetworkStatus.ONLINE,
@@ -42,6 +44,8 @@ class ConnectivityTracker(private val clock: () -> Long = { System.nanoTime() / 
     private val _state = MutableStateFlow(ConnectivitySnapshot())
     val state: StateFlow<ConnectivitySnapshot> = _state.asStateFlow()
     private val pending = mutableSetOf<AutoCloseable>()
+    /** In-flight alternate-edge searches. Survives network changes: old dials end themselves. */
+    private var alternateSearches = 0
 
     fun updateNetwork(networkId: Long?, status: NetworkStatus): Boolean {
         val stale: List<AutoCloseable>
@@ -49,7 +53,10 @@ class ConnectivityTracker(private val clock: () -> Long = { System.nanoTime() / 
             val previous = _state.value
             if (previous.stopped || (previous.networkId == networkId && previous.network == status)) return false
             stale = drainPending()
-            _state.value = ConnectivitySnapshot(previous.epoch + 1, networkId, status)
+            _state.value = ConnectivitySnapshot(
+                previous.epoch + 1, networkId, status,
+                searchingAlternateRoute = alternateSearches > 0,
+            )
         }
         closeAll(stale)
         return true
@@ -62,6 +69,24 @@ class ConnectivityTracker(private val clock: () -> Long = { System.nanoTime() / 
             _state.value = ConnectivitySnapshot(epoch = _state.value.epoch + 1, stopped = true)
         }
         closeAll(stale)
+    }
+
+    /** Shown as "searching for a workaround" while alternate Cloudflare edges are tried. */
+    fun beginAlternateRouteSearch() = synchronized(lock) {
+        alternateSearches++
+        publishSearching()
+    }
+
+    fun endAlternateRouteSearch() = synchronized(lock) {
+        alternateSearches = (alternateSearches - 1).coerceAtLeast(0)
+        publishSearching()
+    }
+
+    private fun publishSearching() {
+        val searching = alternateSearches > 0 && !_state.value.stopped
+        if (_state.value.searchingAlternateRoute != searching) {
+            _state.value = _state.value.copy(searchingAlternateRoute = searching)
+        }
     }
 
     fun isCurrent(epoch: Long): Boolean = synchronized(lock) {

@@ -42,6 +42,7 @@
     <string name="connectivity_retrying">Retrying connection…</string>
     <string name="connectivity_unreachable">Unable to connect to Telegram.</string>
     <string name="connectivity_degraded">Some Telegram connections are unavailable.</string>
+    <string name="connectivity_searching_alternate">The usual Cloudflare address is not responding. Searching for another route… This can take up to 30 seconds.</string>
 
     <!-- Stats -->
     <string name="stats_connections">Connections</string>

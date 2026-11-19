@@ -87,6 +87,9 @@ class Bridge internal constructor(
     private val DC_FAIL_COOLDOWN_MS = 30_000L
     private val WS_FAIL_TIMEOUT_MS = 2_000
     private val WS_NORMAL_TIMEOUT_MS = 10_000
+    // CF proxy attempt via the DNS address. Healthy CF handshakes take 1-2 s; when the address
+    // is blocked, every second here delays the alternate edges (CfEdgeRouter), so 6 s, not 10.
+    private val CF_DNS_TIMEOUT_MS = 6_000
     private val DIRECT_IP_FAIL_COOLDOWN_MS = 60 * 60_000L
     private val CF_FALLBACK_PARALLELISM = 2
 
@@ -117,9 +120,16 @@ class Bridge internal constructor(
         val hops = cfEdgeRouter.plan(networkId)
         var dnsFailed = false
         var lastError: Exception? = null
+        var searching = false
+        try {
         for (hop in hops) {
             if (cfEdgeRouter.isFallback(hops, hop) && !dnsFailed) break
             checkEpoch(epoch)
+            // Any edge after the first hop means the usual address failed: tell the UI.
+            if (!searching && hop is CfEdgeRouter.Hop.Edge && hop != hops.first()) {
+                searching = true
+                connectivity.beginAlternateRouteSearch()
+            }
             try {
                 val ws = when (hop) {
                     CfEdgeRouter.Hop.Dns ->
@@ -178,6 +188,9 @@ class Bridge internal constructor(
             }
         }
         throw lastError ?: WebSocketException("No CF proxy address available for DC $dc")
+        } finally {
+            if (searching) connectivity.endAlternateRouteSearch()
+        }
     }
 
     /** One WebSocket attempt; [edgeIp] overrides the CF proxy address (TLS SNI/Host unchanged). */
@@ -658,7 +671,7 @@ class Bridge internal constructor(
         val mediaTag = if (isMedia) " media" else ""
         return try {
             record(epoch, dc, isMedia, TransportRoute.CLOUDFLARE, RoutePhase.CONNECTING)
-            val ws = dial(epoch, dc, isMedia, baseDomain, bufferSize, WS_NORMAL_TIMEOUT_MS, baseDomain, secure)
+            val ws = dial(epoch, dc, isMedia, baseDomain, bufferSize, CF_DNS_TIMEOUT_MS, baseDomain, secure)
             if (!connectivity.recordIfCurrent(epoch) {
                 cfDnsResolver.markAvailable()
                 cfCooldowns.clear(baseDomain)

@@ -7,6 +7,7 @@ import dev.minios.tgwsproxy.proxy.RoutePhase
 internal enum class ConnectionSummary {
     WAITING_FOR_NETWORK_STATE, OFFLINE, CHECKING, CAPTIVE_PORTAL, BLOCKED, UNCERTAIN,
     WAITING_FOR_TELEGRAM, WORKING, WAITING_FOR_DATA, CONNECTING, RETRYING, UNREACHABLE, DEGRADED,
+    SEARCHING_ALTERNATE_ROUTE,
 }
 
 internal fun presentConnectivity(snapshot: ConnectivitySnapshot): ConnectionSummary {
@@ -19,6 +20,9 @@ internal fun presentConnectivity(snapshot: ConnectivitySnapshot): ConnectionSumm
         snapshot.network == NetworkStatus.BLOCKED -> ConnectionSummary.BLOCKED
         responding && snapshot.exhausted.isNotEmpty() -> ConnectionSummary.DEGRADED
         responding -> ConnectionSummary.WORKING
+        // Before UNCERTAIN/UNREACHABLE: the usual Cloudflare address failed and alternates are
+        // being tried; tell the user it may take a while instead of looking stuck.
+        snapshot.searchingAlternateRoute -> ConnectionSummary.SEARCHING_ALTERNATE_ROUTE
         snapshot.network != NetworkStatus.ONLINE -> ConnectionSummary.UNCERTAIN
         snapshot.exhausted.isNotEmpty() -> ConnectionSummary.UNREACHABLE
         snapshot.routes.values.any { it.phase == RoutePhase.CONNECTING } -> ConnectionSummary.CONNECTING

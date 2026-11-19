@@ -14,7 +14,7 @@ class PowerProfileMigrationTest {
         )
 
         assertEquals(
-            BATTERY_SAVING_DEFAULT_POWER_PROFILE,
+            DEFAULT_POWER_PROFILE,
             migration.profile,
         )
         assertFalse(migration.showNotice)
@@ -27,7 +27,7 @@ class PowerProfileMigrationTest {
             current = LEGACY_DEFAULT_POWER_PROFILE,
         )
 
-        assertEquals(BATTERY_SAVING_DEFAULT_POWER_PROFILE, migration.profile)
+        assertEquals(DEFAULT_POWER_PROFILE, migration.profile)
         assertTrue(migration.showNotice)
     }
 

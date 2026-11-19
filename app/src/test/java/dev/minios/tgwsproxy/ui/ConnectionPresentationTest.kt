@@ -20,6 +20,23 @@ class ConnectionPresentationTest {
     }
 
     @Test
+    fun alternateRouteSearchIsShownUntilTelegramResponds() {
+        val searching = ConnectivitySnapshot(
+            network = NetworkStatus.ONLINE,
+            routes = mapOf(cf to RouteObservation(RoutePhase.CONNECTING)),
+            searchingAlternateRoute = true,
+        )
+        assertEquals(ConnectionSummary.SEARCHING_ALTERNATE_ROUTE, presentConnectivity(searching))
+        // Also on a not-yet-validated network, where the search is the more useful message.
+        assertEquals(ConnectionSummary.SEARCHING_ALTERNATE_ROUTE,
+            presentConnectivity(searching.copy(network = NetworkStatus.UNVERIFIED)))
+        // Telegram already gets answers (other connections work): keep showing that.
+        assertEquals(ConnectionSummary.WORKING, presentConnectivity(searching.copy(routes = mapOf(cf to responding))))
+        // Network problems still win.
+        assertEquals(ConnectionSummary.OFFLINE, presentConnectivity(searching.copy(network = NetworkStatus.OFFLINE)))
+    }
+
+    @Test
     fun workingFallbackDoesNotShowDirectRouteFailuresAsConnectionFailure() {
         assertEquals(ConnectionSummary.WORKING, presentConnectivity(ConnectivitySnapshot(
             network = NetworkStatus.ONLINE,

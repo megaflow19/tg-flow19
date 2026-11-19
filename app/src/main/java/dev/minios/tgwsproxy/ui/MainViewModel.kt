@@ -24,7 +24,6 @@ import dev.minios.tgwsproxy.proxy.*
 import dev.minios.tgwsproxy.service.ProxyService
 import dev.minios.tgwsproxy.service.ProxyServiceState
 import dev.minios.tgwsproxy.update.UpdateRepository
-import dev.minios.tgwsproxy.update.UpdateInstaller
 import dev.minios.tgwsproxy.update.UpdatePolicy
 import dev.minios.tgwsproxy.update.UpdateState
 
@@ -180,52 +179,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun refreshCachedUpdate() {
-        if (_updateState.value !is UpdateState.Downloading && _updateState.value !is UpdateState.Checking) {
+        if (_updateState.value !is UpdateState.Checking) {
             _updateState.value = updateRepository.cachedState()
         }
     }
 
     fun openAvailableUpdate() {
         val manifest = (_updateState.value as? UpdateState.Available)?.release ?: return
-        val ctx = getApplication<Application>()
-        if (manifest.apkUrl == null || manifest.checksumUrl == null) {
-            openReleasePage(manifest.releaseUrl)
-            return
-        }
-        if (!UpdateInstaller.canInstallPackages(ctx)) {
-            try {
-                UpdateInstaller.openInstallPermission(ctx)
-                _toastMessage.tryEmit(ctx.getString(R.string.update_install_permission_required))
-            } catch (_: Exception) {
-                _toastMessage.tryEmit(ctx.getString(R.string.update_install_permission_failed))
-            }
-            return
-        }
-        _updateState.value = UpdateState.Downloading(manifest)
-        viewModelScope.launch {
-            updateRepository.downloadApk(manifest).fold(
-                onSuccess = { apk ->
-                    try {
-                        UpdateInstaller.verify(ctx, apk, manifest)
-                        DiagnosticLogger.event(
-                            "update_apk_verified",
-                            "version" to manifest.versionName,
-                        )
-                        UpdateInstaller.install(ctx, apk)
-                    } catch (error: Exception) {
-                        DiagnosticLogger.failure("update_install_failed", error)
-                        _toastMessage.tryEmit(ctx.getString(R.string.update_install_failed))
-                    } finally {
-                        _updateState.value = UpdateState.Available(manifest)
-                    }
-                },
-                onFailure = { error ->
-                    DiagnosticLogger.failure("update_download_failed", error)
-                    _updateState.value = UpdateState.Available(manifest)
-                    _toastMessage.tryEmit(ctx.getString(R.string.update_download_failed))
-                },
-            )
-        }
+        // The app never downloads or installs APKs itself (Play Protect classifies an in-app
+        // installer from an unknown developer as harmful); updates come via Obtainium or the
+        // release page.
+        openReleasePage(manifest.releaseUrl)
     }
 
     private fun openReleasePage(releaseUrl: String) {

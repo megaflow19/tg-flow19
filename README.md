@@ -122,9 +122,9 @@ off. Android force-stop and battery restrictions can prevent background startup.
 
 ## Updates and Support
 
-Check for updates in **About**. In-app downloads are verified against the
-published SHA-256 checksum, package identity, version, and installed signing
-certificate before Android asks you to confirm installation.
+Check for updates in **About**. TG Flow19 only checks for new releases; it never
+downloads or installs APKs itself. Install updates with Obtainium or from the
+release page.
 
 For connection problems, start with the built-in **Help**. If the problem persists,
 [open an issue](https://github.com/megaflow19/tg-flow19/issues) with your

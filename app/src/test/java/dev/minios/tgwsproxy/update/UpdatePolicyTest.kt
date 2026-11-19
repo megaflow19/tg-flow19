@@ -4,7 +4,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class UpdatePolicyTest {
@@ -79,12 +78,5 @@ class UpdatePolicyTest {
                 ),
             ),
         )
-    }
-
-    @Test
-    fun parsesSha256AssetAndRejectsInvalidContent() {
-        val checksum = "a".repeat(64)
-        assertEquals(checksum, parseSha256("$checksum  ${releaseApkName("5.0.0")}\n"))
-        assertThrows(IllegalArgumentException::class.java) { parseSha256("not-a-checksum") }
     }
 }

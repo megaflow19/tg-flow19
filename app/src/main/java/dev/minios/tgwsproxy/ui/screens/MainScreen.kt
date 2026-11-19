@@ -126,12 +126,7 @@ fun MainScreen(
                         .padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                val availableUpdate =
-                    when (updateState) {
-                        is UpdateState.Available -> updateState.release
-                        is UpdateState.Downloading -> updateState.release
-                        else -> null
-                    }
+                val availableUpdate = (updateState as? UpdateState.Available)?.release
                 StatusCard(
                     serviceState = serviceState,
                     config = config,
@@ -212,10 +207,6 @@ fun MainScreen(
                             Spacer(modifier = Modifier.height(16.dp))
                             UpdateCard(
                                 versionName = availableUpdate.versionName,
-                                downloading = updateState is UpdateState.Downloading,
-                                installable =
-                                    availableUpdate.apkUrl != null &&
-                                        availableUpdate.checksumUrl != null,
                                 onOpenUpdate = onOpenUpdate,
                             )
                         }
@@ -422,8 +413,6 @@ private fun ConnectionAdviceCard(advice: ConnectionAdvice) {
 @Composable
 private fun UpdateCard(
     versionName: String,
-    downloading: Boolean,
-    installable: Boolean,
     onOpenUpdate: () -> Unit,
 ) {
     Card(
@@ -455,17 +444,8 @@ private fun UpdateCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            TextButton(onClick = onOpenUpdate, enabled = !downloading) {
-                if (downloading) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                } else {
-                    Text(
-                        stringResource(
-                            if (installable) R.string.update_install
-                            else R.string.update_open_release
-                        )
-                    )
-                }
+            TextButton(onClick = onOpenUpdate) {
+                Text(stringResource(R.string.update_open_release))
             }
         }
     }

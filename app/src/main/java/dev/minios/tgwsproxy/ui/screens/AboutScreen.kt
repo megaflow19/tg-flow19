@@ -253,13 +253,6 @@ private fun UpdateCheckCard(
     onCheck: () -> Unit,
     onOpenUpdate: () -> Unit,
 ) {
-    val release =
-        when (updateState) {
-            is UpdateState.Available -> updateState.release
-            is UpdateState.Downloading -> updateState.release
-            else -> null
-        }
-    val installable = release?.let { it.apkUrl != null && it.checksumUrl != null } == true
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
@@ -301,21 +294,14 @@ private fun UpdateCheckCard(
                         color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.Medium,
                     )
-                is UpdateState.Downloading ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp,
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(stringResource(R.string.update_downloading))
-                    }
             }
-            if (updateState is UpdateState.Available || updateState is UpdateState.Downloading) {
+            if (updateState is UpdateState.Available) {
+                // Updates are installed by the user (Obtainium or the release page), never by
+                // the app itself: an in-app APK installer gets the app classified as harmful
+                // by Play Protect (verified 2026-11-19 with A/B builds).
                 Button(
                     onClick = onOpenUpdate,
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = updateState !is UpdateState.Downloading,
                     colors =
                         ButtonDefaults.buttonColors(
                             containerColor = MaterialTheme.colorScheme.primary
@@ -323,17 +309,7 @@ private fun UpdateCheckCard(
                     shape = RoundedCornerShape(14.dp),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                 ) {
-                    Text(
-                        stringResource(
-                            if (updateState is UpdateState.Downloading) {
-                                R.string.update_downloading
-                            } else if (!installable) {
-                                R.string.update_open_release
-                            } else {
-                                R.string.update_download_install
-                            }
-                        )
-                    )
+                    Text(stringResource(R.string.update_open_release))
                 }
             } else {
                 OutlinedButton(

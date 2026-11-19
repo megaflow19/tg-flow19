@@ -25,9 +25,6 @@ import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.Response
 import java.io.IOException
-import java.io.File
-import java.io.FileOutputStream
-import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resumeWithException
 
@@ -47,8 +44,6 @@ internal fun releaseApkName(versionName: String): String = "$RELEASE_APK_PREFIX-
 private const val CHECK_INTERVAL_MS = 24 * 60 * 60_000L
 private const val MAX_API_CHARS = 64 * 1024
 private const val MAX_MANIFEST_CHARS = 8 * 1024
-private const val MAX_CHECKSUM_CHARS = 1024
-private const val MAX_APK_BYTES = 100L * 1024 * 1024
 
 data class UpdateInfo(
     val versionName: String,
@@ -88,7 +83,6 @@ sealed interface UpdateState {
     data object UpToDate : UpdateState
     data object Error : UpdateState
     data class Available(val release: UpdateInfo) : UpdateState
-    data class Downloading(val release: UpdateInfo) : UpdateState
 }
 
 object VersionComparator {
@@ -307,53 +301,6 @@ class UpdateRepository(context: Context) {
             return result.toString()
         }
     }
-
-    suspend fun downloadApk(release: UpdateInfo): Result<File> = withContext(Dispatchers.IO) {
-        runCatching {
-            require(UpdateValidator.isValid(release)) { "Invalid update metadata" }
-            val apkUrl = requireNotNull(release.apkUrl) { "Release APK is unavailable" }
-            val checksumUrl = requireNotNull(release.checksumUrl) { "Release checksum is unavailable" }
-            val expectedChecksum = executeRequest(checksumUrl, "text/plain").use { response ->
-                if (!response.isSuccessful) error("Checksum HTTP ${response.code}")
-                parseSha256(readResponse(response, MAX_CHECKSUM_CHARS))
-            }
-
-            val updateDir = File(contextCacheDir, "updates").apply { mkdirs() }
-            val finalFile = File(updateDir, releaseApkName(release.versionName))
-            val temporaryFile = File(updateDir, "${finalFile.name}.download")
-            try {
-                executeRequest(apkUrl, "application/vnd.android.package-archive").use { response ->
-                    if (!response.isSuccessful) error("APK HTTP ${response.code}")
-                    val body = response.body ?: error("Empty APK response")
-                    if (body.contentLength() > MAX_APK_BYTES) error("APK is too large")
-                    val digest = MessageDigest.getInstance("SHA-256")
-                    var total = 0L
-                    body.byteStream().use { input ->
-                        FileOutputStream(temporaryFile).use { output ->
-                            val buffer = ByteArray(32 * 1024)
-                            while (true) {
-                                val count = input.read(buffer)
-                                if (count < 0) break
-                                total += count
-                                if (total > MAX_APK_BYTES) error("APK is too large")
-                                digest.update(buffer, 0, count)
-                                output.write(buffer, 0, count)
-                            }
-                        }
-                    }
-                    val actualChecksum = digest.digest().joinToString("") { "%02x".format(it) }
-                    require(actualChecksum == expectedChecksum) { "APK checksum mismatch" }
-                }
-                if (finalFile.exists() && !finalFile.delete()) error("Unable to replace cached APK")
-                if (!temporaryFile.renameTo(finalFile)) error("Unable to store downloaded APK")
-                finalFile
-            } finally {
-                temporaryFile.delete()
-            }
-        }
-    }
-
-    private val contextCacheDir: File = context.applicationContext.cacheDir
 }
 
 internal suspend fun Call.awaitResponse(): Response = suspendCancellableCoroutine { continuation ->
@@ -379,11 +326,4 @@ internal suspend fun <T> Call.useResponse(block: (Response) -> T): T = coroutine
     } finally {
         monitor.cancel()
     }
-}
-
-internal fun parseSha256(value: String): String {
-    return value.trim()
-        .substringBefore(' ')
-        .lowercase()
-        .also { require(it.matches(Regex("^[0-9a-f]{64}$"))) { "Invalid checksum" } }
 }

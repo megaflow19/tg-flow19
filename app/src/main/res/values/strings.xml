@@ -196,15 +196,8 @@
     <string name="update_check_failed">Could not check for updates</string>
     <string name="update_available_title">Update available</string>
     <string name="update_available_version">Version %1$s is available</string>
-    <string name="update_install">Update</string>
-    <string name="update_download_install">Download and install</string>
     <string name="update_open_release">Open release page</string>
-    <string name="update_downloading">Downloading update…</string>
     <string name="update_open_failed">Unable to open the release page</string>
-    <string name="update_download_failed">Unable to download or verify the update</string>
-    <string name="update_install_failed">Unable to open the verified update installer</string>
-    <string name="update_install_permission_required">Allow TG Flow19 to install unknown apps, then tap Update again</string>
-    <string name="update_install_permission_failed">Unable to open the install permission settings</string>
     <string name="dc_ip_label" translatable="false">DC:IP</string>
 
     <!-- Event log -->
@@ -233,7 +226,9 @@
     <string name="help_advanced_title">Performance settings</string>
     <string name="help_advanced_text">Manual connection tuning controls the transfer buffer and prepared WS pool size. The pool is used only when Prepare WebSocket connections is enabled; otherwise no prepared sockets are kept, and the manual pool size stays saved.\n\nThe default buffer is 256 KB. Larger buffers or pools consume more resources and do not necessarily improve speed. Change one value at a time to investigate a specific problem.</string>
     <string name="help_battery_title">Power usage</string>
-    <string name="help_battery_text">By default, Keep device awake, prepared WS connections, route probes, and shared-domain refresh are off. The WS keepalive interval is 180 seconds. Automatic routing still reacts to actual traffic when probes are off.\n\nKeeping the device awake may help with screen-off interruptions, but uses power and cannot guarantee network access. Prepared connections retain idle sockets; shorter keepalives send more frequent traffic. Adjust these only as needed: results depend on Android and the network.</string>
+    <string name="help_battery_text">By default, Keep device awake and prepared WS connections are off, while route probes and the shared Cloudflare domain list refresh are on, so a working route is found after start and network changes. The WS keepalive interval is 180 seconds.
+
+Keeping the device awake may help with screen-off interruptions, but uses power and cannot guarantee network access. Prepared connections retain idle sockets; shorter keepalives send more frequent traffic. Adjust these only as needed: results depend on Android and the network.</string>
     <string name="help_theme_title">Theme and appearance</string>
     <string name="help_theme_text">Select System, Light, or Dark in the theme options. The app uses a Telegram-style palette unless Adaptive colors is enabled on Android 12 or newer, where it uses the device Material You palette.\n\nAppearance changes are saved and applied immediately without restarting the proxy.</string>
     <string name="help_log_title">Diagnostic log</string>
@@ -247,7 +242,9 @@
     <string name="help_security_title">Security and access</string>
     <string name="help_security_text">Keep the listen address at 127.0.0.1 for access only from this device. 0.0.0.0 listens on all IPv4 interfaces and may expose the proxy to reachable networks. Do not share the proxy secret or link.\n\nThe TLS WebSocket client does not verify server certificates. Direct TCP adds no TLS layer. Telegram message encryption is separate from these transports; this app is not a VPN and does not promise anonymity.</string>
     <string name="help_updates_title">App updates</string>
-    <string name="help_updates_text">Check for GitHub releases in About. For in-app downloads, the app verifies SHA-256, package identity, version, and signing certificate before handing the APK to the Android installer. These checks are not malware scanning.\n\nAndroid requires permission to install unknown apps and your confirmation to install. If no suitable download assets are available, the app opens the release page instead.</string>
+    <string name="help_updates_text">The app checks GitHub releases (see About) and tells you when a new version is out. It never downloads or installs APKs itself. Install updates with Obtainium (add https://github.com/megaflow19/tg-flow19) or download the APK from the release page; Android asks you to confirm.
+
+Release APKs are signed with the certificate whose SHA-256 fingerprint is 59:ED:87:B6:4A:D0:C7:DE:03:D3:82:B0:D9:59:4D:52:E5:15:BD:AB:67:7B:59:A7:F6:35:90:CF:8E:30:D3:F3.</string>
 
     <!-- About screen -->
     <string name="about_title">About</string>
@@ -265,7 +262,7 @@
     <string name="about_flowseal_project">Original Flowseal project</string>
     <string name="about_limits_title">Important limits</string>
     <string name="about_limits_text">Not a VPN or an anonymity guarantee. The WS client does not verify server certificates; direct TCP adds no TLS. Telegram message encryption is separate.</string>
-    <string name="about_updates_note">Updates come from GitHub. In-app downloads are checked for SHA-256, package, version, and signing certificate; installation requires Android permission and your confirmation.</string>
+    <string name="about_updates_note">Updates come from GitHub releases. The app only checks for them; install with Obtainium or from the release page.</string>
     <string name="about_tabler_icons">Tabler Icons · MIT</string>
     <string name="settings_cf_secure">Use TLS for Cloudflare (port 443)</string>
     <string name="settings_cf_secure_desc">When off, Cloudflare and Workers use port 80 without TLS. HTTP/2 becomes unavailable.</string>

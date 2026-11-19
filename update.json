@@ -1,7 +1,7 @@
 {
-  "versionCode": 10000,
-  "versionName": "1.0.0",
-  "releaseUrl": "https://github.com/megaflow19/tg-flow19/releases/tag/v1.0.0",
-  "apkUrl": "https://github.com/megaflow19/tg-flow19/releases/download/v1.0.0/tg-flow19-1.0.0.apk",
-  "checksumUrl": "https://github.com/megaflow19/tg-flow19/releases/download/v1.0.0/tg-flow19-1.0.0.apk.sha256"
+  "versionCode": 10001,
+  "versionName": "1.0.1",
+  "releaseUrl": "https://github.com/megaflow19/tg-flow19/releases/tag/v1.0.1",
+  "apkUrl": "https://github.com/megaflow19/tg-flow19/releases/download/v1.0.1/tg-flow19-1.0.1.apk",
+  "checksumUrl": "https://github.com/megaflow19/tg-flow19/releases/download/v1.0.1/tg-flow19-1.0.1.apk.sha256"
 }

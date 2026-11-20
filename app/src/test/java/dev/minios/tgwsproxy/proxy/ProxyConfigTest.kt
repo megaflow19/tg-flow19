@@ -63,7 +63,7 @@ class ProxyConfigTest {
 
     @Test fun newTransportDefaultsPreserveSecureAndBatterySavingBehavior() {
         val config = ProxyConfig()
-        assertEquals(true, config.cfSecure)
+        assertEquals(CfTlsMode.AUTO, config.cfTlsMode)
         assertEquals(true, config.cfH2Media)
         assertEquals(emptyList<String>(), config.cfWorkerDomains)
         assertEquals(false, config.forceTestDc)

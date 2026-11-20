@@ -29,6 +29,10 @@ class RawWebSocket private constructor(
     @Volatile
     private var closed = false
 
+    /** CF route only: the transport this connection was made with (diagnostics). */
+    @Volatile
+    internal var cfTransport: CfTransport? = null
+
     companion object {
         private const val OPCODE_CONTINUATION = 0x0
         private const val OPCODE_TEXT = 0x1
@@ -59,6 +63,9 @@ class RawWebSocket private constructor(
          * @param port TCP port
          * @param connectTimeoutMs connection timeout in milliseconds
          * @param bufferSize socket buffer size
+         * @param splitHello with [secure], send the TLS ClientHello split ([CfTransport.TLS_SPLIT])
+         * @param markHandshakeDrops wrap a TLS handshake that times out or is reset after the TCP
+         *   connect in [TlsHandshakeDropped] (CF route: tells SNI blocking from dead addresses)
          */
         fun connect(
             connectHost: String,
@@ -70,11 +77,14 @@ class RawWebSocket private constructor(
             onSocketCreated: ((Socket) -> Unit)? = null,
             secure: Boolean = true,
             sni: String = domain,
+            splitHello: Boolean = false,
+            markHandshakeDrops: Boolean = false,
         ): RawWebSocket {
             // Reuse global TLS context (matching Python's module-level ssl.SSLContext)
             val factory = globalSslContext.socketFactory
+            val split = secure && splitHello
 
-            val socket = if (secure) factory.createSocket() as SSLSocket else Socket()
+            val socket = if (secure && !split) factory.createSocket() as SSLSocket else Socket()
             val clampedTimeout = connectTimeoutMs.coerceIn(1, 10000)
             try {
                 onSocketCreated?.invoke(socket)
@@ -92,17 +102,40 @@ class RawWebSocket private constructor(
                 }
 
                 socket.connect(InetSocketAddress(connectHost, port), clampedTimeout)
-                if (socket is SSLSocket) socket.startHandshake()
-                return finishUpgrade(socket, domain, path)
+                var streams: SplitTlsStreams? = null
+                try {
+                    if (split) streams = SplitTlsStreams.open(socket, globalSslContext, sni, port)
+                    else if (socket is SSLSocket) socket.startHandshake()
+                } catch (e: IOException) {
+                    if (markHandshakeDrops && isDropDuringHandshake(e)) throw TlsHandshakeDropped(e)
+                    throw e
+                }
+                return finishUpgrade(
+                    socket, domain, path,
+                    streams?.input ?: socket.getInputStream(),
+                    streams?.output ?: socket.getOutputStream(),
+                )
             } catch (e: Exception) {
                 try { socket.close() } catch (_: Exception) {}
                 throw e
             }
         }
 
-        private fun finishUpgrade(socket: Socket, domain: String, path: String): RawWebSocket {
-            val input = socket.getInputStream()
-            val output = socket.getOutputStream()
+        /** Silence (read timeout) or a reset/close in the middle of the handshake. */
+        private fun isDropDuringHandshake(e: IOException): Boolean =
+            e is java.net.SocketTimeoutException ||
+                e is java.io.EOFException ||
+                (e is java.net.SocketException && !CfEdgeRouter.isLocalNetworkFailure(e)) ||
+                (e is javax.net.ssl.SSLException && e.cause.let { it is java.net.SocketException || it is java.io.EOFException } &&
+                    !CfEdgeRouter.isLocalNetworkFailure(e))
+
+        private fun finishUpgrade(
+            socket: Socket,
+            domain: String,
+            path: String,
+            input: InputStream,
+            output: OutputStream,
+        ): RawWebSocket {
 
             // Send WebSocket upgrade request with domain as Host
             val key = ByteArray(16).also { SecureRandom().nextBytes(it) }
@@ -203,7 +236,9 @@ class RawWebSocket private constructor(
             cachedCfAddress: (String) -> String? = defaultCfDnsResolver::cached,
             secure: Boolean = true,
             isTestDc: Boolean = false,
+            splitHello: Boolean = false,
         ): RawWebSocket {
+            val cf = cfProxyDomain != null
             val domains = if (cfProxyDomain != null) {
                 val wsDc = if (dc == 203) 2 else dc
                 listOf("kws${wsDc}.$cfProxyDomain")
@@ -232,6 +267,8 @@ class RawWebSocket private constructor(
                         onSocketCreated = onSocketCreated,
                         secure = cfProxyDomain == null || secure,
                         port = if (cfProxyDomain != null && !secure) 80 else 443,
+                        splitHello = cf && splitHello,
+                        markHandshakeDrops = cf,
                     )
                 } catch (e: WsHandshakeError) {
                     lastError = e
@@ -259,6 +296,8 @@ class RawWebSocket private constructor(
                                     onSocketCreated = onSocketCreated,
                                     secure = secure,
                                     port = if (secure) 443 else 80,
+                                    splitHello = splitHello,
+                                    markHandshakeDrops = true,
                                 )
                             } catch (fallbackError: Exception) {
                                 if (fallbackError is CancellationException) throw fallbackError

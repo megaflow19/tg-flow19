@@ -27,6 +27,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import dev.minios.tgwsproxy.R
 import dev.minios.tgwsproxy.proxy.CfProxyDomains
+import dev.minios.tgwsproxy.proxy.CfTlsMode
 import dev.minios.tgwsproxy.proxy.ProxyConfig
 import dev.minios.tgwsproxy.ui.BackgroundProtectionRows
 import dev.minios.tgwsproxy.ui.icons.TablerIcons
@@ -66,7 +67,7 @@ fun SettingsScreen(
     var cfDomain by remember { mutableStateOf(config.customCfDomains().joinToString("\n")) }
     var useCfDomain by remember { mutableStateOf(config.customCfDomains().isNotEmpty()) }
     var workerDomains by remember { mutableStateOf(config.cfWorkerDomains.joinToString("\n")) }
-    var cfSecure by remember { mutableStateOf(config.cfSecure) }
+    var cfTlsMode by remember { mutableStateOf(config.cfTlsMode) }
     var cfH2Media by remember { mutableStateOf(config.cfH2Media) }
     var fakeTlsDomain by remember { mutableStateOf(config.fakeTlsDomain) }
     var forceTestDc by remember { mutableStateOf(config.forceTestDc) }
@@ -166,7 +167,7 @@ fun SettingsScreen(
             showTrafficInNotification = showTrafficInNotification,
             cfProxyDomains = if (useCfDomain) parsedDomains ?: config.customCfDomains() else emptyList(),
             cfWorkerDomains = parsedWorkers!!,
-            cfSecure = cfSecure,
+            cfTlsMode = cfTlsMode,
             cfH2Media = cfH2Media,
             fakeTlsDomain = tlsDomain,
             forceTestDc = forceTestDc,
@@ -195,7 +196,7 @@ fun SettingsScreen(
         cfDomain,
         useCfDomain,
         workerDomains,
-        cfSecure,
+        cfTlsMode,
         cfH2Media,
         fakeTlsDomain,
         forceTestDc,
@@ -465,19 +466,35 @@ fun SettingsScreen(
                     }
 
                     Spacer(modifier = Modifier.height(8.dp))
-                    SettingsSwitchRow(
-                        title = stringResource(R.string.settings_cf_secure),
-                        description = stringResource(R.string.settings_cf_secure_desc),
-                        checked = cfSecure,
-                        onCheckedChange = { cfSecure = it },
+                    Text(
+                        text = stringResource(R.string.settings_cf_secure),
+                        modifier = Modifier.padding(horizontal = 8.dp),
+                        style = MaterialTheme.typography.bodyLarge,
                     )
+                    Text(
+                        text = stringResource(R.string.settings_cf_secure_desc),
+                        modifier = Modifier.padding(horizontal = 8.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    listOf(
+                        CfTlsMode.AUTO to R.string.settings_cf_tls_auto,
+                        CfTlsMode.ON to R.string.settings_cf_tls_on,
+                        CfTlsMode.OFF to R.string.settings_cf_tls_off,
+                    ).forEach { (mode, label) ->
+                        SettingsRadioRow(
+                            selected = cfTlsMode == mode,
+                            label = stringResource(label),
+                            onClick = { cfTlsMode = mode },
+                        )
+                    }
                     Spacer(modifier = Modifier.height(8.dp))
                     SettingsSwitchRow(
                         title = stringResource(R.string.settings_h2_media),
                         description = stringResource(R.string.settings_h2_media_desc),
                         checked = cfH2Media,
                         onCheckedChange = { cfH2Media = it },
-                        enabled = (autoOptimizeConnection || cfEnabled) && cfSecure && !forceTestDc,
+                        enabled = (autoOptimizeConnection || cfEnabled) && cfTlsMode != CfTlsMode.OFF && !forceTestDc,
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(

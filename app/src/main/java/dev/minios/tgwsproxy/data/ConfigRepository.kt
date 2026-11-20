@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.distinctUntilChanged
+import dev.minios.tgwsproxy.proxy.CfTlsMode
 import dev.minios.tgwsproxy.proxy.ProxyConfig
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "tg_ws_proxy_config")
@@ -67,6 +68,13 @@ internal fun resolvePowerProfileMigration(
 }
 
 /**
+ * Cloudflare TLS mode. Before 1.0.2 this was an on/off switch: on (the default) becomes
+ * [CfTlsMode.AUTO], so existing users get the automatic fallbacks; off stays [CfTlsMode.OFF].
+ */
+internal fun resolveCfTlsMode(stored: String?, legacySecure: Boolean?): CfTlsMode =
+    CfTlsMode.fromKey(stored) ?: if (legacySecure == false) CfTlsMode.OFF else CfTlsMode.AUTO
+
+/**
  * Persistent configuration storage using DataStore.
  */
 class ConfigRepository(private val context: Context) {
@@ -91,7 +99,9 @@ class ConfigRepository(private val context: Context) {
         val CF_PROXY_USER_DOMAIN = stringPreferencesKey("cf_proxy_user_domain")
         val CF_PROXY_DOMAINS = stringPreferencesKey("cf_proxy_domains")
         val CF_WORKER_DOMAINS = stringPreferencesKey("cf_worker_domains")
+        /** Legacy on/off (before 1.0.2): read only to migrate into [CF_TLS_MODE]. */
         val CF_SECURE = booleanPreferencesKey("cf_secure")
+        val CF_TLS_MODE = stringPreferencesKey("cf_tls_mode")
         val CF_H2_MEDIA = booleanPreferencesKey("cf_h2_media")
         val FAKE_TLS_DOMAIN = stringPreferencesKey("fake_tls_domain")
         val FORCE_TEST_DC = booleanPreferencesKey("force_test_dc")
@@ -190,7 +200,7 @@ class ConfigRepository(private val context: Context) {
             showDetailedStats = prefs[Keys.SHOW_DETAILED_STATS] ?: false,
             cfProxyDomains = ProxyConfig.parseDomains(prefs[Keys.CF_PROXY_DOMAINS].orEmpty()).orEmpty(),
             cfWorkerDomains = ProxyConfig.parseDomains(prefs[Keys.CF_WORKER_DOMAINS].orEmpty()).orEmpty(),
-            cfSecure = prefs[Keys.CF_SECURE] ?: true,
+            cfTlsMode = resolveCfTlsMode(prefs[Keys.CF_TLS_MODE], prefs[Keys.CF_SECURE]),
             cfH2Media = prefs[Keys.CF_H2_MEDIA] ?: true,
             fakeTlsDomain = prefs[Keys.FAKE_TLS_DOMAIN]?.trim()?.lowercase()
                 ?.takeIf(dev.minios.tgwsproxy.proxy.CfProxyDomains::isValidDomain).orEmpty(),
@@ -239,7 +249,9 @@ class ConfigRepository(private val context: Context) {
             prefs[Keys.CF_PROXY_USER_DOMAIN] = config.cfProxyUserDomain
             prefs[Keys.CF_PROXY_DOMAINS] = config.cfProxyDomains.joinToString("\n")
             prefs[Keys.CF_WORKER_DOMAINS] = config.cfWorkerDomains.joinToString("\n")
-            prefs[Keys.CF_SECURE] = config.cfSecure
+            prefs[Keys.CF_TLS_MODE] = config.cfTlsMode.name
+            // Kept in step so a downgrade to 1.0.1 still sees a sensible on/off value.
+            prefs[Keys.CF_SECURE] = config.cfTlsMode != CfTlsMode.OFF
             prefs[Keys.CF_H2_MEDIA] = config.cfH2Media
             prefs[Keys.FAKE_TLS_DOMAIN] = config.fakeTlsDomain
             prefs[Keys.FORCE_TEST_DC] = config.forceTestDc

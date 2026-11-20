@@ -78,6 +78,8 @@ class Bridge internal constructor(
     private val directWsCircuitBreaker: DirectWsCircuitBreaker,
     // Process-wide by default, keyed by network: remembers which Cloudflare edge works.
     private val cfEdgeRouter: CfEdgeRouter = CfEdgeRouter.shared,
+    // Process-wide, keyed by network: TLS, split ClientHello or port 80 (see CfTransportSelector).
+    private val cfTransports: CfTransportSelector = CfTransportSelector.shared,
 ) {
     constructor(connectivity: ConnectivityTracker) : this(connectivity, DirectWsCircuitBreaker.shared)
 
@@ -104,21 +106,57 @@ class Bridge internal constructor(
     }
 
     /**
-     * Dials a WebSocket. For the TLS CF proxy route this walks [CfEdgeRouter]'s plan: the
-     * remembered edge, the DNS address, then alternate Cloudflare edges after a network-level
-     * failure of the DNS address. An HTTP answer from the proxy (other than 403 from an edge
-     * that does not serve the zone) is a server response, not address blocking, so it is
-     * rethrown without trying other addresses.
+     * Dials a WebSocket. For the CF proxy route the transport comes from [CfTransportSelector]
+     * (TLS, TLS with a split ClientHello, or port 80); when every address drops the handshake
+     * for this name, the next allowed transport is tried right away.
      */
     private fun dial(epoch: Long, dc: Int, media: Boolean, target: String, buffer: Int,
-                     timeout: Int, cfDomain: String? = null, secure: Boolean = true,
+                     timeout: Int, cfDomain: String? = null, tlsMode: CfTlsMode = CfTlsMode.AUTO,
                      isTestDc: Boolean = false): RawWebSocket {
-        if (cfDomain == null || !secure) {
-            return dialVia(epoch, dc, media, target, buffer, timeout, cfDomain, secure, isTestDc, edgeIp = null)
+        if (cfDomain == null) {
+            return dialVia(epoch, dc, media, target, buffer, timeout, null, CfTransport.TLS, isTestDc, edgeIp = null)
         }
         val networkId = connectivity.state.value.networkId
+        var transport = cfTransports.current(networkId, tlsMode)
+        if (cfTransports.isBackingOff(networkId)) {
+            throw SniBlockedException(transport, null)
+        }
+        while (true) {
+            try {
+                val ws = if (transport.secure) {
+                    dialEdges(epoch, dc, media, target, buffer, timeout, cfDomain, transport, isTestDc, networkId)
+                } else {
+                    dialVia(epoch, dc, media, target, buffer, timeout, cfDomain, transport, isTestDc, edgeIp = null)
+                }
+                connectivity.recordIfCurrent(epoch) { cfTransports.worked(networkId) }
+                ws.cfTransport = transport
+                return ws
+            } catch (e: SniBlockedException) {
+                checkEpoch(epoch)
+                var next: CfTransport? = null
+                connectivity.recordIfCurrent(epoch, requireInternet = true) {
+                    next = cfTransports.sniBlocked(networkId, tlsMode, e.transport)
+                }
+                transport = next ?: throw e
+            }
+        }
+    }
+
+    /**
+     * One TLS transport over [CfEdgeRouter]'s plan: the remembered edge, the DNS address, then
+     * alternate Cloudflare edges after a network-level failure of the DNS address. An HTTP answer
+     * from the proxy (other than 403 from an edge that does not serve the zone) is a server
+     * response, not address blocking, so it is rethrown without trying other addresses. A
+     * handshake dropped after the TCP connect on [CfTransportSelector.SNI_BLOCK_ADDRESSES]
+     * addresses is blocking by name: no address is penalized and [SniBlockedException] is thrown.
+     */
+    private fun dialEdges(epoch: Long, dc: Int, media: Boolean, target: String, buffer: Int,
+                          timeout: Int, cfDomain: String, transport: CfTransport,
+                          isTestDc: Boolean, networkId: Long?): RawWebSocket {
         val hops = cfEdgeRouter.plan(networkId)
         var dnsFailed = false
+        var dropped = 0
+        val droppedEdges = ArrayList<CfEdgeRouter.Hop.Edge>(2)
         var lastError: Exception? = null
         var searching = false
         try {
@@ -133,12 +171,17 @@ class Bridge internal constructor(
             try {
                 val ws = when (hop) {
                     CfEdgeRouter.Hop.Dns ->
-                        dialVia(epoch, dc, media, target, buffer, timeout, cfDomain, secure, isTestDc, edgeIp = null)
+                        dialVia(epoch, dc, media, target, buffer, timeout, cfDomain, transport, isTestDc, edgeIp = null)
                     is CfEdgeRouter.Hop.Edge ->
                         dialVia(epoch, dc, media, target, buffer, minOf(timeout, CfEdgeRouter.EDGE_TIMEOUT_MS),
-                            cfDomain, secure, isTestDc, edgeIp = hop.ip)
+                            cfDomain, transport, isTestDc, edgeIp = hop.ip)
                 }
                 connectivity.recordIfCurrent(epoch) {
+                    // The same name and transport passed here, so an edge that dropped the
+                    // handshake earlier in this attempt is bad as an address: cool it down.
+                    // Seen 2026-11-20: a remembered edge dropped every split handshake, costing
+                    // each new connection a timeout before the DNS address answered.
+                    droppedEdges.forEach { cfEdgeRouter.edgeFailed(networkId, it, forbidden = false) }
                     when (hop) {
                         CfEdgeRouter.Hop.Dns -> cfEdgeRouter.dnsWorked(networkId)
                         is CfEdgeRouter.Hop.Edge -> {
@@ -165,6 +208,18 @@ class Bridge internal constructor(
                 throw e
             } catch (e: Exception) {
                 lastError = e
+                if (e is TlsHandshakeDropped) {
+                    // TCP reached the address but the handshake for this name died: possibly
+                    // blocking by SNI, which no other address fixes. Never penalize the address.
+                    dropped++
+                    if (hop == CfEdgeRouter.Hop.Dns) dnsFailed = true
+                    if (hop is CfEdgeRouter.Hop.Edge) {
+                        droppedEdges += hop
+                        DiagnosticLogger.event("cf_edge_failed", "edge" to hop.index, "reason" to "handshake_dropped")
+                    }
+                    if (dropped >= CfTransportSelector.SNI_BLOCK_ADDRESSES) throw SniBlockedException(transport, e)
+                    continue
+                }
                 if (CfEdgeRouter.isLocalNetworkFailure(e)) {
                     // The phone had no route at all (network switching or gone): not address
                     // blocking. Do not penalize edges, and do not walk the rest of the list.
@@ -195,7 +250,7 @@ class Bridge internal constructor(
 
     /** One WebSocket attempt; [edgeIp] overrides the CF proxy address (TLS SNI/Host unchanged). */
     private fun dialVia(epoch: Long, dc: Int, media: Boolean, target: String, buffer: Int,
-                        timeout: Int, cfDomain: String?, secure: Boolean,
+                        timeout: Int, cfDomain: String?, transport: CfTransport,
                         isTestDc: Boolean, edgeIp: String?): RawWebSocket {
         checkEpoch(epoch)
         val sockets = mutableListOf<Socket>()
@@ -215,7 +270,7 @@ class Bridge internal constructor(
                     var address: String? = edgeIp
                     if (address == null) connectivity.recordIfCurrent(epoch) { address = cfDnsResolver.cached(domain) }
                     address
-                 }, secure = secure, isTestDc = isTestDc)
+                 }, secure = transport.secure, isTestDc = isTestDc, splitHello = transport.splitHello)
             if (!connectivity.isCurrent(epoch)) {
                 ws.abort()
                 checkEpoch(epoch)
@@ -548,6 +603,8 @@ class Bridge internal constructor(
         val destination = (if (config.forceTestDc) MtProtoConstants.DC_TEST_IPS else MtProtoConstants.DC_IPS)[dc]
             ?: return null
         val domains = config.cfWorkerDomains.sortedBy { it != activeWorkers[dc] }
+        // Workers follow the CF proxy route's transport on this network (no ladder of their own).
+        val transport = cfTransports.current(connectivity.state.value.networkId, config.cfTlsMode)
         for (domain in domains) {
             checkEpoch(epoch)
             if ((workerRetryAfter[domain] ?: 0) > System.currentTimeMillis()) continue
@@ -557,8 +614,9 @@ class Bridge internal constructor(
                 val ws = RawWebSocket.connect(
                     domain, domain,
                     path = "/apiws?dst=${java.net.URLEncoder.encode(destination, "UTF-8")}&dc=$dc",
-                    port = if (config.cfSecure) 443 else 80,
-                    secure = config.cfSecure,
+                    port = transport.port,
+                    secure = transport.secure,
+                    splitHello = transport.splitHello,
                     bufferSize = config.bufferSize,
                     onSocketCreated = { socket ->
                         sockets.add(socket)
@@ -607,7 +665,9 @@ class Bridge internal constructor(
         val allDomains = config.customCfDomains().sortedBy { it != activeCustomCf[dc] }
             .ifEmpty { CfProxyDomains.getDomainsForDc(dc) }
         if (allDomains.isEmpty()) return null
-        if (isMedia && config.cfH2Media && config.cfSecure) {
+        // HTTP/2 media uses the system TLS stack: only while plain TLS works on this network.
+        val transport = cfTransports.current(connectivity.state.value.networkId, config.cfTlsMode)
+        if (isMedia && config.cfH2Media && transport == CfTransport.TLS) {
             h2Pool.open(dc, allDomains, epoch)?.let { channel ->
                 if (!connectivity.recordIfCurrent(epoch) {
                     ProxyStats.connectionsCfProxy.incrementAndGet()
@@ -627,7 +687,7 @@ class Bridge internal constructor(
         Log.i(TAG, "DC$dc$mediaTag -> trying CF proxy (${availableDomains.size} available)")
 
         // Keep the sticky domain fast, then cap the remaining connection pressure at two.
-        val first = tryCfDomain(dc, isMedia, config.bufferSize, availableDomains.first(), epoch, config.cfSecure)
+        val first = tryCfDomain(dc, isMedia, config.bufferSize, availableDomains.first(), epoch, config.cfTlsMode)
         if (first != null) return cfConnectionReady(dc, isMedia, first.first, first.second, epoch)
 
         for (batch in availableDomains.drop(1).chunked(CF_FALLBACK_PARALLELISM)) {
@@ -636,7 +696,7 @@ class Bridge internal constructor(
                 val results = coroutineScope {
                     batch.map { baseDomain ->
                         async(Dispatchers.IO) {
-                            tryCfDomain(dc, isMedia, config.bufferSize, baseDomain, epoch, config.cfSecure)?.also {
+                            tryCfDomain(dc, isMedia, config.bufferSize, baseDomain, epoch, config.cfTlsMode)?.also {
                                 candidates.add(it.second)
                             }
                         }
@@ -659,7 +719,7 @@ class Bridge internal constructor(
         bufferSize: Int,
         baseDomain: String,
         epoch: Long,
-        secure: Boolean,
+        tlsMode: CfTlsMode,
     ): Pair<String, RawWebSocket>? {
         checkEpoch(epoch)
         var skip = false
@@ -671,7 +731,7 @@ class Bridge internal constructor(
         val mediaTag = if (isMedia) " media" else ""
         return try {
             record(epoch, dc, isMedia, TransportRoute.CLOUDFLARE, RoutePhase.CONNECTING)
-            val ws = dial(epoch, dc, isMedia, baseDomain, bufferSize, CF_DNS_TIMEOUT_MS, baseDomain, secure)
+            val ws = dial(epoch, dc, isMedia, baseDomain, bufferSize, CF_DNS_TIMEOUT_MS, baseDomain, tlsMode)
             if (!connectivity.recordIfCurrent(epoch) {
                 cfDnsResolver.markAvailable()
                 cfCooldowns.clear(baseDomain)
@@ -709,7 +769,10 @@ class Bridge internal constructor(
             CfProxyDomains.setActiveDomain(dc, baseDomain)
             activeCustomCf[dc] = baseDomain
             ProxyStats.connectionsCfProxy.incrementAndGet()
-            DiagnosticLogger.event("upstream_route_ready", "dc" to dc, "media" to isMedia, "route" to "cloudflare")
+            DiagnosticLogger.event(
+                "upstream_route_ready", "dc" to dc, "media" to isMedia, "route" to "cloudflare",
+                "transport" to ws.cfTransport?.name,
+            )
             record(epoch, dc, isMedia, TransportRoute.CLOUDFLARE, RoutePhase.CONNECTED)
         }) { ws.abort(); checkEpoch(epoch) }
         return UpstreamConnection(UpstreamType.CFPROXY, ws = ws, epoch = epoch)
@@ -773,6 +836,7 @@ class Bridge internal constructor(
         isMedia: Boolean,
         adaptiveRoutingEnabled: Boolean,
         webSocketPingIntervalSeconds: Int,
+        cfTlsMode: CfTlsMode = CfTlsMode.AUTO,
         closeClient: () -> Unit,
     ) = coroutineScope {
         val epoch = upstream.epoch
@@ -811,6 +875,11 @@ class Bridge internal constructor(
         var pendingDownBytes = 0L
         var pendingLastDownAt = 0L
         val stalled = AtomicBoolean(false)
+        // CF over TLS (plain or split) can be frozen by DPI after the handshake: watch media
+        // streams like direct WS, and step the network's CF transport down when they freeze.
+        val cfStreamTransport = upstream.ws?.cfTransport
+            ?.takeIf { upstream.type == UpstreamType.CFPROXY && !upstream.worker && it.secure && cfTlsMode != CfTlsMode.OFF }
+        val trackPending = upstream.type == UpstreamType.WEBSOCKET || cfStreamTransport != null
 
         fun markDirectRequest(bytes: Int) {
             synchronized(pendingLock) {
@@ -835,7 +904,7 @@ class Bridge internal constructor(
                     false
                 }
             }
-            if (meaningful) connectivity.recordIfCurrent(epoch) {
+            if (meaningful && upstream.type == UpstreamType.WEBSOCKET) connectivity.recordIfCurrent(epoch) {
                 directWsCircuitBreaker.recordResponsive(connectivity.state.value.networkId, isMedia)
             }
         }
@@ -875,7 +944,8 @@ class Bridge internal constructor(
         }
 
         val stallWatchdogJob = if (
-            adaptiveRoutingEnabled && isMedia && upstream.type == UpstreamType.WEBSOCKET
+            isMedia && (cfStreamTransport != null ||
+                (adaptiveRoutingEnabled && upstream.type == UpstreamType.WEBSOCKET))
         ) {
             launch(Dispatchers.IO) {
                 while (isActive) {
@@ -897,6 +967,28 @@ class Bridge internal constructor(
                         }
                     }
                     if (stalledTraffic == null) continue
+
+                    if (cfStreamTransport != null) {
+                        if (!stalled.compareAndSet(false, true)) break
+                        var changedTo: CfTransport? = null
+                        connectivity.recordIfCurrent(epoch, requireInternet = true) {
+                            changedTo = cfTransports.streamStalled(
+                                connectivity.state.value.networkId, cfTlsMode, cfStreamTransport,
+                            )
+                        }
+                        DiagnosticLogger.event(
+                            "cf_stream_stalled",
+                            "dc" to dc,
+                            "transport" to cfStreamTransport.name,
+                            "pendingBytesUp" to stalledTraffic.first,
+                            "pendingBytesDown" to stalledTraffic.second,
+                            "sessionBytesDown" to downBytes,
+                            "switchedTo" to changedTo?.name,
+                        )
+                        Log.w(TAG, "DC$dc$mediaTag CF stream stalled via $cfStreamTransport; closing session")
+                        upstream.ws?.abort()
+                        break
+                    }
 
                     var result: DirectWsStallResult? = null
                     connectivity.recordIfCurrent(epoch, requireInternet = true) {
@@ -954,14 +1046,14 @@ class Bridge internal constructor(
                             if (splitter != null) {
                                 val parts = splitter.split(reencrypted, decrypted)
                                 if (parts.isEmpty()) continue
-                                if (upstream.type == UpstreamType.WEBSOCKET) markDirectRequest(read)
+                                if (trackPending) markDirectRequest(read)
                                 if (parts.size > 1) {
                                     upstream.ws!!.sendBatch(parts)
                                 } else {
                                     upstream.ws!!.sendBinary(parts[0])
                                 }
                             } else {
-                                if (upstream.type == UpstreamType.WEBSOCKET) markDirectRequest(read)
+                                if (trackPending) markDirectRequest(read)
                                 upstream.ws!!.sendBinary(reencrypted)
                             }
                         }
@@ -987,7 +1079,7 @@ class Bridge internal constructor(
                             lastActivityAt.set(System.currentTimeMillis())
                             downBytes += data.size
                             downPackets++
-                            if (upstream.type == UpstreamType.WEBSOCKET) markDirectResponse(data.size)
+                            if (trackPending) markDirectResponse(data.size)
 
                             // Decrypt from telegram, re-encrypt for client
                             val decrypted = cryptoCtx.telegramDecryptor.update(data)

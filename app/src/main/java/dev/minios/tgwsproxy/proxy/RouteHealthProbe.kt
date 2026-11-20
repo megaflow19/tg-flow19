@@ -53,6 +53,8 @@ object RouteHealthProbe {
             if (!connectivity.isCurrent(epoch)) throw CancellationException("Probe connectivity changed")
         }
         checkCurrent()
+        // Probe CF the way connections are made now on this network (TLS, split or port 80).
+        val cfTransport = CfTransportSelector.shared.current(connectivity.state.value.networkId, config.cfTlsMode)
         val sockets = mutableListOf<Socket>()
         val owner = Job(context[Job])
         val cancelMonitor = CoroutineScope(Dispatchers.Default + owner).launch(start = CoroutineStart.UNDISPATCHED) {
@@ -81,7 +83,8 @@ object RouteHealthProbe {
                         dnsResolver.resolve(domain, connectivity, epoch)
                     },
                     cachedCfAddress = dnsResolver::cached,
-                    secure = config.cfSecure,
+                    secure = cfTransport.secure,
+                    splitHello = cfTransport.splitHello,
                     isTestDc = config.forceTestDc,
                 )
                 checkCurrent()

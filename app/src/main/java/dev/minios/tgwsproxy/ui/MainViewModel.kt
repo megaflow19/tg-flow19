@@ -305,7 +305,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             targetIp = domain,
                             cfProxyDomain = domain,
                             connectTimeoutMs = 8000,
-                            secure = cfg.cfSecure,
+                            // TLS modes test with the split ClientHello: it passes on networks that
+                            // drop the CF proxy names and costs nothing where they are not dropped.
+                            secure = cfg.cfTlsMode != CfTlsMode.OFF,
+                            splitHello = cfg.cfTlsMode != CfTlsMode.OFF,
                         )
                         val elapsed = System.currentTimeMillis() - start
                         ws.close()

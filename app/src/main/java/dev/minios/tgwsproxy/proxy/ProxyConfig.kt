@@ -31,7 +31,7 @@ data class ProxyConfig(
     val cfProxyUserDomain: String = "",
     val cfProxyDomains: List<String> = emptyList(),
     val cfWorkerDomains: List<String> = emptyList(),
-    val cfSecure: Boolean = true,
+    val cfTlsMode: CfTlsMode = CfTlsMode.AUTO,
     val cfH2Media: Boolean = true,
     val fakeTlsDomain: String = "",
     val forceTestDc: Boolean = false,

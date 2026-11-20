@@ -261,7 +261,10 @@
     <string name="about_updates_note">Обновления выходят на GitHub. Приложение только проверяет их наличие; устанавливайте через Obtainium или со страницы релиза.</string>
     <string name="about_tabler_icons">Tabler Icons · MIT</string>
     <string name="settings_cf_secure">TLS для Cloudflare (порт 443)</string>
-    <string name="settings_cf_secure_desc">При отключении Cloudflare и Workers используют порт 80 без TLS. HTTP/2 становится недоступен.</string>
+    <string name="settings_cf_secure_desc">Авто: сначала обычный TLS; если сеть обрывает его по имени домена — TLS с разделённым ClientHello, затем порт 80 без TLS. Выбор запоминается для каждой сети. HTTP/2 для медиа работает только с обычным TLS.</string>
+    <string name="settings_cf_tls_auto">Авто (рекомендуется)</string>
+    <string name="settings_cf_tls_on">Вкл — только TLS, порт 443</string>
+    <string name="settings_cf_tls_off">Выкл — порт 80 без TLS</string>
     <string name="settings_h2_media">HTTP/2 для медиа</string>
     <string name="settings_h2_media_desc">Общее HTTP/2-соединение для медиа перед переходом к WebSocket. Нужны включённый Cloudflare, TLS и нетестовые DC.</string>
     <string name="settings_worker_domains">Домены Cloudflare Workers</string>

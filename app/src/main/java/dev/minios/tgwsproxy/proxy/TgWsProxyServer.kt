@@ -499,6 +499,7 @@ class TgWsProxyServer(
                     isMedia = isMedia,
                     adaptiveRoutingEnabled = config.autoOptimizeConnection && config.cfProxyEnabled,
                     webSocketPingIntervalSeconds = config.webSocketPingIntervalSeconds,
+                    cfTlsMode = config.cfTlsMode,
                     closeClient = { try { clientSocket.close() } catch (_: Exception) {} },
                 )
             } finally {

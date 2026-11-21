@@ -29,7 +29,15 @@ data class ConnectivitySnapshot(
     val evidenceStartedAt: Long = 0,
     /** A CF proxy connection is trying alternate Cloudflare edges (see CfEdgeRouter). */
     val searchingAlternateRoute: Boolean = false,
+    /**
+     * Identifies the network across reconnects (the Android handle changes each time): a hash of
+     * the Wi-Fi gateway, the SIM subscription, etc. Null when nothing stable is known.
+     */
+    val networkKey: String? = null,
 ) {
+    /** Key for state that should survive reconnects to the same network (see CfTransportSelector). */
+    val transportKey: String? get() = networkKey
+        ?: networkId?.let { CfTransportSelector.TRANSIENT_KEY_PREFIX + it }
     val allowsTraffic: Boolean get() = !stopped && network in setOf(
         NetworkStatus.UNKNOWN, NetworkStatus.UNVERIFIED, NetworkStatus.ONLINE,
     )
@@ -47,7 +55,7 @@ class ConnectivityTracker(private val clock: () -> Long = { System.nanoTime() / 
     /** In-flight alternate-edge searches. Survives network changes: old dials end themselves. */
     private var alternateSearches = 0
 
-    fun updateNetwork(networkId: Long?, status: NetworkStatus): Boolean {
+    fun updateNetwork(networkId: Long?, status: NetworkStatus, networkKey: String? = null): Boolean {
         val stale: List<AutoCloseable>
         synchronized(lock) {
             val previous = _state.value
@@ -56,6 +64,7 @@ class ConnectivityTracker(private val clock: () -> Long = { System.nanoTime() / 
             _state.value = ConnectivitySnapshot(
                 previous.epoch + 1, networkId, status,
                 searchingAlternateRoute = alternateSearches > 0,
+                networkKey = networkKey?.takeIf { networkId != null },
             )
         }
         closeAll(stale)

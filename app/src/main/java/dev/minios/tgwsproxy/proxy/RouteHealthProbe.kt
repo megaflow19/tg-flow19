@@ -54,7 +54,7 @@ object RouteHealthProbe {
         }
         checkCurrent()
         // Probe CF the way connections are made now on this network (TLS, split or port 80).
-        val cfTransport = CfTransportSelector.shared.current(connectivity.state.value.networkId, config.cfTlsMode)
+        val cfTransport = CfTransportSelector.shared.current(connectivity.state.value.transportKey, config.cfTlsMode)
         val sockets = mutableListOf<Socket>()
         val owner = Job(context[Job])
         val cancelMonitor = CoroutineScope(Dispatchers.Default + owner).launch(start = CoroutineStart.UNDISPATCHED) {

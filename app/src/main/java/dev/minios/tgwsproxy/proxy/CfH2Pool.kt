@@ -73,6 +73,12 @@ class CfH2Pool internal constructor(
     private val generation = java.util.concurrent.atomic.AtomicLong()
     private val activeDomains = ConcurrentHashMap<Int, String>()
 
+    internal companion object {
+        /** Process-wide: a proxy that refuses HTTP/2 does so after runtime restarts too. */
+        @Volatile internal var rejectedUntil = 0L
+        const val REJECTED_COOLDOWN_MS = 30 * 60_000L
+    }
+
     fun reset() {
         generation.incrementAndGet()
         lanes.values.forEach(Lane::close)
@@ -84,6 +90,7 @@ class CfH2Pool internal constructor(
 
     fun open(dc: Int, domains: List<String>, epoch: Long): Channel? {
         if (dc !in MtProtoConstants.DC_IPS) return null
+        if (rejectedUntil > System.currentTimeMillis()) return null
         val currentGeneration = generation.get()
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8)
         for (domain in domains.sortedBy { it != activeDomains[dc] }) {
@@ -429,6 +436,19 @@ class CfH2Pool internal constructor(
                 throw e
             } catch (e: Exception) {
                 if (request.rotating || closed || !currentCoroutineContext().isActive) return
+                if (e is H2TransportError && e.rejectedByProxy) {
+                    // The CF proxy refused HTTP/2 (seen 2026-11-20/21: HTTP 404 on POST /api right
+                    // after a successful preflight). Forwarding it as MTProto -404 tells Telegram its
+                    // auth key is unknown, and media hung at start. Close the lane instead and use
+                    // WebSocket media for a while; Telegram reconnects at once.
+                    rejectedUntil = System.currentTimeMillis() + REJECTED_COOLDOWN_MS
+                    DiagnosticLogger.event(
+                        "h2_rejected", "dc" to dc, "status" to -e.code, "cooldownMs" to REJECTED_COOLDOWN_MS,
+                    )
+                    queue.close(IOException("H2 rejected by proxy"))
+                    lane.close()
+                    return
+                }
                 queue.close(e)
                 if (e !is H2TransportError) {
                     connectivity.recordIfCurrent(lane.epoch, requireInternet = true) {
@@ -558,6 +578,7 @@ class CfH2Pool internal constructor(
                         }
                     }
                 } catch (e: H2TransportError) {
+                    if (e.rejectedByProxy) return@launch
                     val body = NativeHttpCodec.bytesLE(e.code)
                     output.write(crypto.clientEncryptor.update(NativeHttpCodec.encodeReply(body, tag)))
                     output.flush()
@@ -598,7 +619,10 @@ class CfH2Pool internal constructor(
  * "mtproto" = 4-byte negative MTProto transport reply (e.g. -404 auth key, -429 flood).
  */
 private class H2TransportError(val code: Int, val source: String) :
-    IOException("MTProto transport error $code ($source)")
+    IOException("MTProto transport error $code ($source)") {
+    /** The CF proxy itself refused the request (HTTP 403/404/444); not an MTProto reply. */
+    val rejectedByProxy: Boolean get() = source == "http" && code != -429
+}
 
 /** Weighted, cancellable memory backpressure; no network data persists across epochs. */
 class ByteBudget(private val limit: Int) {

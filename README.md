@@ -26,8 +26,9 @@ It is not affiliated with crim50n, Flowseal or Telegram.
 
 - **Cloudflare TLS mode Auto** (Settings → TLS for Cloudflare): when a network drops the TLS
   handshake by domain name, the app retries with the TLS ClientHello split into two records and two
-  TCP segments; when the stream then freezes, it falls back to port 80. The working step is
-  remembered per network and plain TLS is rechecked hourly. On and Off modes are still available.
+  TCP segments; when connections then freeze (requests go out, nothing comes back), it falls back
+  to port 80 within seconds. The working step is remembered per network, also across reconnects
+  and restarts, and plain TLS is rechecked hourly. On and Off modes are still available.
 - **Alternate Cloudflare addresses:** when the usual Cloudflare address for the proxy domains does
   not respond, the app finds another Cloudflare address that works and remembers it per network.
 - **Cloudflare proxy route:** TLS SNI is the bare base domain, and `kwsN.<domain>` goes only in the

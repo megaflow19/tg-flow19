@@ -36,6 +36,26 @@ class CfEdgeRouterTest {
         assertEquals("e1", r.h2Override(net))
     }
 
+    @Test fun droppedPreferredEdgeIsNotTriedFirstByParallelAttempts() {
+        var now = 1_000L
+        val r = router { now }
+        r.edgeWorked(net, Hop.Edge("e1", 1), afterDnsFailure = false)
+        assertEquals(Hop.Edge("e1", 1), r.plan(net).first())
+
+        r.edgeDropped(net, Hop.Edge("e1", 1))
+        val plan = r.plan(net)
+        assertEquals(Hop.Dns, plan.first())
+        assertTrue("still available as a fallback", plan.contains(Hop.Edge("e1", 1)))
+
+        now += CfEdgeRouter.EDGE_SUSPECT_MS
+        assertEquals(Hop.Edge("e1", 1), r.plan(net).first())
+
+        // Working again clears the suspicion at once.
+        r.edgeDropped(net, Hop.Edge("e1", 1))
+        r.edgeWorked(net, Hop.Edge("e1", 1), afterDnsFailure = false)
+        assertEquals(Hop.Edge("e1", 1), r.plan(net).first())
+    }
+
     @Test fun dnsBlockExpiresAndAnotherNetworkStartsClean() {
         var now = 1_000L
         val r = router { now }

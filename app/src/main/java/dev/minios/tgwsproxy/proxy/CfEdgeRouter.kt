@@ -32,6 +32,8 @@ internal class CfEdgeRouter(
         var preferred: String? = null
         var dnsBlockedUntil = 0L
         val edgeCooldown = HashMap<String, Long>()
+        /** Edges that just dropped a handshake: not tried first until then (see [edgeDropped]). */
+        val edgeSuspect = HashMap<String, Long>()
         var cursor = 0
     }
 
@@ -43,7 +45,9 @@ internal class CfEdgeRouter(
         val now = clock()
         val state = state(networkId)
         val hops = ArrayList<Hop>(EDGE_ATTEMPTS + 2)
-        val preferred = state.preferred?.takeIf { (state.edgeCooldown[it] ?: 0L) <= now }
+        val preferred = state.preferred?.takeIf {
+            (state.edgeCooldown[it] ?: 0L) <= now && (state.edgeSuspect[it] ?: 0L) <= now
+        }
         if (preferred != null) hops += edgeHop(preferred)
         if (state.dnsBlockedUntil <= now) hops += Hop.Dns
         var added = 0
@@ -72,7 +76,18 @@ internal class CfEdgeRouter(
         val state = state(networkId)
         state.preferred = hop.ip
         state.edgeCooldown.remove(hop.ip)
+        state.edgeSuspect.remove(hop.ip)
         if (afterDnsFailure) state.dnsBlockedUntil = clock() + DNS_BLOCK_TTL_MS
+    }
+
+    /**
+     * [hop] dropped a TLS handshake. That may be blocking by name (no address helps) or a bad
+     * address, which is only known once another address passes. Until then, attempts running in
+     * parallel stop trying it first for [EDGE_SUSPECT_MS], so they do not all wait out its
+     * timeout. Seen 2026-11-20/21: a burst of connections each lost 5 s on the same dropped edge.
+     */
+    fun edgeDropped(networkId: Long?, hop: Hop.Edge) = synchronized(lock) {
+        state(networkId).edgeSuspect[hop.ip] = clock() + EDGE_SUSPECT_MS
     }
 
     fun edgeFailed(networkId: Long?, hop: Hop.Edge, forbidden: Boolean) = synchronized(lock) {
@@ -134,6 +149,7 @@ internal class CfEdgeRouter(
         const val EDGE_TIMEOUT_MS = 5_000
         const val DNS_BLOCK_TTL_MS = 10 * 60_000L
         const val EDGE_FAIL_COOLDOWN_MS = 10 * 60_000L
+        const val EDGE_SUSPECT_MS = 60_000L
         const val EDGE_FORBIDDEN_COOLDOWN_MS = 6 * 60 * 60_000L
         private const val MAX_NETWORKS = 16
 

@@ -117,8 +117,9 @@ class Bridge internal constructor(
             return dialVia(epoch, dc, media, target, buffer, timeout, null, CfTransport.TLS, isTestDc, edgeIp = null)
         }
         val networkId = connectivity.state.value.networkId
-        var transport = cfTransports.current(networkId, tlsMode)
-        if (cfTransports.isBackingOff(networkId)) {
+        val networkKey = connectivity.state.value.transportKey
+        var transport = cfTransports.current(networkKey, tlsMode)
+        if (cfTransports.isBackingOff(networkKey)) {
             throw SniBlockedException(transport, null)
         }
         while (true) {
@@ -128,14 +129,14 @@ class Bridge internal constructor(
                 } else {
                     dialVia(epoch, dc, media, target, buffer, timeout, cfDomain, transport, isTestDc, edgeIp = null)
                 }
-                connectivity.recordIfCurrent(epoch) { cfTransports.worked(networkId) }
+                connectivity.recordIfCurrent(epoch) { cfTransports.worked(networkKey) }
                 ws.cfTransport = transport
                 return ws
             } catch (e: SniBlockedException) {
                 checkEpoch(epoch)
                 var next: CfTransport? = null
                 connectivity.recordIfCurrent(epoch, requireInternet = true) {
-                    next = cfTransports.sniBlocked(networkId, tlsMode, e.transport)
+                    next = cfTransports.sniBlocked(networkKey, tlsMode, e.transport)
                 }
                 transport = next ?: throw e
             }
@@ -215,6 +216,7 @@ class Bridge internal constructor(
                     if (hop == CfEdgeRouter.Hop.Dns) dnsFailed = true
                     if (hop is CfEdgeRouter.Hop.Edge) {
                         droppedEdges += hop
+                        connectivity.recordIfCurrent(epoch) { cfEdgeRouter.edgeDropped(networkId, hop) }
                         DiagnosticLogger.event("cf_edge_failed", "edge" to hop.index, "reason" to "handshake_dropped")
                     }
                     if (dropped >= CfTransportSelector.SNI_BLOCK_ADDRESSES) throw SniBlockedException(transport, e)
@@ -604,7 +606,7 @@ class Bridge internal constructor(
             ?: return null
         val domains = config.cfWorkerDomains.sortedBy { it != activeWorkers[dc] }
         // Workers follow the CF proxy route's transport on this network (no ladder of their own).
-        val transport = cfTransports.current(connectivity.state.value.networkId, config.cfTlsMode)
+        val transport = cfTransports.current(connectivity.state.value.transportKey, config.cfTlsMode)
         for (domain in domains) {
             checkEpoch(epoch)
             if ((workerRetryAfter[domain] ?: 0) > System.currentTimeMillis()) continue
@@ -666,7 +668,7 @@ class Bridge internal constructor(
             .ifEmpty { CfProxyDomains.getDomainsForDc(dc) }
         if (allDomains.isEmpty()) return null
         // HTTP/2 media uses the system TLS stack: only while plain TLS works on this network.
-        val transport = cfTransports.current(connectivity.state.value.networkId, config.cfTlsMode)
+        val transport = cfTransports.current(connectivity.state.value.transportKey, config.cfTlsMode)
         if (isMedia && config.cfH2Media && transport == CfTransport.TLS) {
             h2Pool.open(dc, allDomains, epoch)?.let { channel ->
                 if (!connectivity.recordIfCurrent(epoch) {
@@ -875,6 +877,9 @@ class Bridge internal constructor(
         var pendingDownBytes = 0L
         var pendingLastDownAt = 0L
         val stalled = AtomicBoolean(false)
+        // Which side ended the session first: "client" (Telegram closed or gave up), "upstream"
+        // (the server or network closed it) or "watchdog" (closed here as frozen).
+        val endedBy = java.util.concurrent.atomic.AtomicReference<String?>(null)
         // CF over TLS (plain or split) can be frozen by DPI after the handshake: watch media
         // streams like direct WS, and step the network's CF transport down when they freeze.
         val cfStreamTransport = upstream.ws?.cfTransport
@@ -973,7 +978,7 @@ class Bridge internal constructor(
                         var changedTo: CfTransport? = null
                         connectivity.recordIfCurrent(epoch, requireInternet = true) {
                             changedTo = cfTransports.streamStalled(
-                                connectivity.state.value.networkId, cfTlsMode, cfStreamTransport,
+                                connectivity.state.value.transportKey, cfTlsMode, cfStreamTransport,
                             )
                         }
                         DiagnosticLogger.event(
@@ -986,6 +991,7 @@ class Bridge internal constructor(
                             "switchedTo" to changedTo?.name,
                         )
                         Log.w(TAG, "DC$dc$mediaTag CF stream stalled via $cfStreamTransport; closing session")
+                        endedBy.compareAndSet(null, "watchdog")
                         upstream.ws?.abort()
                         break
                     }
@@ -1009,6 +1015,7 @@ class Bridge internal constructor(
                         "scope" to "network-media",
                     )
                     Log.w(TAG, "DC$dc$mediaTag direct WS stalled; closing session (strike ${recorded.strikes})")
+                    endedBy.compareAndSet(null, "watchdog")
                     upstream.ws?.abort()
                     break
                 }
@@ -1065,6 +1072,8 @@ class Bridge internal constructor(
                 }
             } catch (e: Exception) {
                 if (TgWsProxyServer.globalVerbose) Log.d(TAG, "Client->upstream ended: ${cfTransportErrorForLog(e)}")
+            } finally {
+                endedBy.compareAndSet(null, "client")
             }
         }
 
@@ -1112,6 +1121,8 @@ class Bridge internal constructor(
                 }
             } catch (e: Exception) {
                 if (TgWsProxyServer.globalVerbose) Log.d(TAG, "Upstream->client ended: ${cfTransportErrorForLog(e)}")
+            } finally {
+                endedBy.compareAndSet(null, "upstream")
             }
         }
 
@@ -1127,8 +1138,23 @@ class Bridge internal constructor(
             pingJob?.cancel()
             stallWatchdogJob?.cancel()
 
+            val durationMs = System.currentTimeMillis() - startTime
+            // A CF session that got (almost) nothing back counts like a frozen stream: Telegram
+            // closes such connections within seconds, before the media watchdog would fire.
+            var deadSession = false
+            var switchedTo: CfTransport? = null
+            if (cfStreamTransport != null && !stalled.get() &&
+                CfTransportSelector.isDeadSession(durationMs, upBytes, downBytes)
+            ) {
+                connectivity.recordIfCurrent(epoch, requireInternet = true) {
+                    deadSession = true
+                    switchedTo = cfTransports.streamStalled(
+                        connectivity.state.value.transportKey, cfTlsMode, cfStreamTransport,
+                    )
+                }
+            }
             // Log a compact per-session summary.
-            val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
+            val elapsed = durationMs / 1000.0
             Log.i(TAG, "Session: ${upstream.type} %.1fs up=%s(%d) down=%s(%d)".format(
                 elapsed,
                 MtProtoConstants.humanBytes(upBytes), upPackets,
@@ -1139,12 +1165,16 @@ class Bridge internal constructor(
                 "dc" to dc,
                 "media" to isMedia,
                 "route" to upstream.type,
-                "durationMs" to System.currentTimeMillis() - startTime,
+                "durationMs" to durationMs,
                 "bytesUp" to upBytes,
                 "bytesDown" to downBytes,
                 "packetsUp" to upPackets,
                 "packetsDown" to downPackets,
                 "stalled" to stalled.get(),
+                "endedBy" to endedBy.get(),
+                "transport" to upstream.ws?.cfTransport?.name,
+                "dead" to deadSession,
+                "switchedTo" to switchedTo?.name,
             )
         }
     }

@@ -22,8 +22,8 @@ android {
         minSdk = 26
         targetSdk = 34
         // Version code scheme: major*10000 + minor*100 + patch (1.0.0 -> 10000); must match update.json.
-        versionCode = 10002
-        versionName = "1.0.2"
+        versionCode = 10003
+        versionName = "1.0.3"
     }
 
     val hasPropertiesFile = File("app/keystore/signing.properties").exists()

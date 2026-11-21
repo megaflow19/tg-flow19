@@ -40,6 +40,7 @@ import dev.minios.tgwsproxy.diagnostics.withAutomaticRouteDefaults
 import dev.minios.tgwsproxy.diagnostics.withAutomaticPerformanceDefaults
 import dev.minios.tgwsproxy.diagnostics.withRuntimeConnectionPreferences
 import dev.minios.tgwsproxy.proxy.CfProxyDomains
+import dev.minios.tgwsproxy.proxy.CfTransportSelector
 import dev.minios.tgwsproxy.proxy.ConnectivityTracker
 import dev.minios.tgwsproxy.proxy.ConnectivitySnapshot
 import dev.minios.tgwsproxy.proxy.NetworkStatus
@@ -304,6 +305,7 @@ class ProxyService : Service() {
         serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
         val runtimeId = (++runtimeGeneration).also { activeRuntimeId = it }
+        CfTransportSelector.shared.attachStore(PrefsCfTransportStore(applicationContext))
         val connectivity = ConnectivityTracker()
         runtimeConnectivity = connectivity
         serverJob = serviceScope?.launch {
@@ -320,7 +322,10 @@ class ProxyService : Service() {
                     initialCapabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL) == true,
                     false,
                 )
-                connectivity.updateNetwork(initialNetwork?.networkHandle, initialStatus)
+                connectivity.updateNetwork(
+                    initialNetwork?.networkHandle, initialStatus,
+                    initialNetwork?.let { NetworkIdentity.key(manager, it, initialCapabilities) },
+                )
                 val configurationEpoch = connectivity.state.value.epoch
                 val carriedAdvice = synchronized(runtimeOwnershipLock) {
                     if (stopRequested || activeRuntimeId != runtimeId || instance !== this@ProxyService) {
@@ -431,7 +436,28 @@ class ProxyService : Service() {
                         synchronized(runtimeOwnershipLock) {
                             if (activeRuntimeId == runtimeId && connectivity.isCurrent(snapshot.epoch) &&
                                 connectivity.state.value.internetConfirmed && activeConfig.autoOptimizeConnection
-                            ) applyAutomaticAdvice(advice, connectivity, runtimeId, snapshot.epoch)
+                            ) {
+                                val advised = config.withAutomaticRouteDefaults().withConnectionAdvice(advice)
+                                    .withAutomaticPerformanceDefaults().withRuntimeConnectionPreferences()
+                                if (advised.poolSize == activeConfig.poolSize) {
+                                    // Only the route order changes: apply it to new connections and
+                                    // keep Telegram's open sessions. A full restart here dropped every
+                                    // connection a few seconds after the route had started working.
+                                    automaticRouteOverride = AutomaticAdvice(
+                                        advice, connectivity,
+                                        NetworkDecision(runtimeId, snapshot.epoch, connectivity.state.value.networkId),
+                                    )
+                                    notificationManager.cancel(ADVICE_NOTIFICATION_ID)
+                                    srv.updateConfig(advised)
+                                    _runtimeRouteMode.value = advised.runtimeRouteMode()
+                                    DiagnosticLogger.event(
+                                        "connection_advice_applied", "advice" to advice.name,
+                                        "source" to "automatic", "restart" to false,
+                                    )
+                                } else {
+                                    applyAutomaticAdvice(advice, connectivity, runtimeId, snapshot.epoch)
+                                }
+                            }
                         }
                     }
                 }
@@ -791,18 +817,24 @@ class ProxyService : Service() {
             requestedNetworkStatus = status
             automaticRouteOverride = null
             networkChangeJob?.cancel()
+            val manager = getSystemService(ConnectivityManager::class.java)
+            val networkKey = NetworkIdentity.key(manager, network, capabilities)
+            val networkKind = NetworkIdentity.kind(capabilities)
             if (!stabilize || status == NetworkStatus.CAPTIVE_PORTAL || status == NetworkStatus.BLOCKED) {
-                connectivity.updateNetwork(network.networkHandle, status)
+                connectivity.updateNetwork(network.networkHandle, status, networkKey)
             } else {
-                connectivity.updateNetwork(network.networkHandle, NetworkStatus.CHECKING)
+                connectivity.updateNetwork(network.networkHandle, NetworkStatus.CHECKING, networkKey)
                 networkChangeJob = lifecycleScope.launch {
                     delay(750)
                     synchronized(runtimeOwnershipLock) {
                         if (stopRequested || activeRuntimeId != runtimeId || currentNetwork != network ||
                             requestedNetworkStatus != status || runtimeConnectivity !== connectivity
                         ) return@synchronized
-                        connectivity.updateNetwork(network.networkHandle, status)
-                        DiagnosticLogger.event("network_changed", "state" to status.name, "epoch" to connectivity.state.value.epoch)
+                        connectivity.updateNetwork(network.networkHandle, status, networkKey)
+                        DiagnosticLogger.event(
+                            "network_changed", "state" to status.name, "epoch" to connectivity.state.value.epoch,
+                            "kind" to networkKind, "known" to (networkKey != null),
+                        )
                     }
                 }
             }

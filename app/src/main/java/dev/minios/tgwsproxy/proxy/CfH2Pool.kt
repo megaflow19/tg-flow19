@@ -185,7 +185,7 @@ class CfH2Pool internal constructor(
                 override fun lookup(hostname: String): List<InetAddress> {
                     // While the DNS addresses are blocked on this network, use the Cloudflare
                     // edge that the WebSocket route found working (see CfEdgeRouter).
-                    CfEdgeRouter.shared.h2Override(connectivity.state.value.networkId)?.let {
+                    CfEdgeRouter.shared.h2Override(connectivity.state.value.transportKey)?.let {
                         return listOf(InetAddress.getByName(it))
                     }
                     return Dns.SYSTEM.lookup(if (hostname == sniHost) host else hostname)

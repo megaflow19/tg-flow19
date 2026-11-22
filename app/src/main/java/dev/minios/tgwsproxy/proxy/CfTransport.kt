@@ -177,6 +177,24 @@ internal class CfTransportSelector(
         persist()
     }
 
+    /**
+     * The network known as [from] got its full identity [to] (see NetworkIdentity). What the full
+     * key already remembers wins; otherwise steps learned under the partial key are copied over
+     * (copied, not moved: another router without IPv6 may share the partial key).
+     */
+    fun rekey(from: String?, to: String) = synchronized(lock) {
+        if (from == to || to in states) return
+        val partial = states[from] ?: return
+        state(to).apply {
+            transport = partial.transport
+            since = partial.since
+            blockedUntil = partial.blockedUntil
+            avoidSplitUntil = partial.avoidSplitUntil
+            strikes.addAll(partial.strikes)
+        }
+        persist()
+    }
+
     private fun load(store: Store) {
         val saved = try {
             store.load()?.let { json.decodeFromString<List<Saved>>(it) }
@@ -244,7 +262,17 @@ internal class CfTransportSelector(
         const val STALL_STRIKES = 3
         const val STALL_WINDOW_MS = 2 * 60_000L
         const val STALL_DEDUP_MS = 1_000L
-        const val AVOID_SPLIT_MS = 6 * 60 * 60_000L
+        /**
+         * A network where the split froze kept freezing it for days (2026-11-20/21); with 6 h the
+         * avoidance ran out between hourly rechecks and the split froze Telegram again.
+         */
+        const val AVOID_SPLIT_MS = 24 * 60 * 60_000L
+        /**
+         * Live check on open CF sessions: this many bytes sent after the last byte came back and
+         * unanswered this long count as a strike before Telegram gives up on the connection.
+         */
+        const val LIVE_TAIL_MIN_BYTES = 512L
+        const val LIVE_TAIL_SILENT_MS = 6_000L
         /** Addresses that must drop the handshake before it counts as blocking by name. */
         const val SNI_BLOCK_ADDRESSES = 2
         private const val MAX_NETWORKS = 16
@@ -256,10 +284,23 @@ internal class CfTransportSelector(
          * Healthy sessions closed at the same moment got 700+ bytes; of 120 healthy port-80
          * sessions none got 0 bytes in 3 s or more; sessions shorter than 2 s are clients that
          * gave up while the connection was still being made.
+         *
+         * Cut off mid-stream (2026-11-21, Wi-Fi, split TLS): each flow passed 10-30 KB, then went
+         * silent; Telegram closed it after 4-17 s and reconnected, so the app looked connected
+         * while Telegram kept "updating". [tailUpBytes] is what was sent after the last byte came
+         * back and [tailSilentMs] how long the first of those bytes stayed unanswered: a healthy
+         * server answers within a second, an idle connection has no unanswered tail.
          */
-        fun isDeadSession(durationMs: Long, bytesUp: Long, bytesDown: Long): Boolean =
+        fun isDeadSession(
+            durationMs: Long,
+            bytesUp: Long,
+            bytesDown: Long,
+            tailUpBytes: Long = 0L,
+            tailSilentMs: Long = 0L,
+        ): Boolean =
             (durationMs >= 2_000L && bytesUp >= 1_024L && bytesDown < 512L) ||
-                (durationMs >= 3_000L && bytesUp >= 256L && bytesDown == 0L)
+                (durationMs >= 3_000L && bytesUp >= 256L && bytesDown == 0L) ||
+                (tailUpBytes >= 512L && tailSilentMs >= 3_000L)
     }
 }
 

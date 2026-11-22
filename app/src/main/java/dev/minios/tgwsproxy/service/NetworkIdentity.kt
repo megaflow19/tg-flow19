@@ -45,7 +45,9 @@ internal object NetworkIdentity {
 
     fun key(manager: ConnectivityManager, network: Network, capabilities: NetworkCapabilities?): String? = try {
         when (val kind = kind(capabilities)) {
-            "wifi", "ethernet" -> gateway(manager.getLinkProperties(network))?.let { "$kind:${hash(it)}" }
+            "wifi", "ethernet" -> manager.getLinkProperties(network)?.let { properties ->
+                gateway(properties)?.let { "$kind:${hash(it + "|" + routerIdentity(properties))}" }
+            }
             "cellular" -> "cellular:${subscription(capabilities) ?: "default"}"
             else -> null
         }
@@ -60,6 +62,25 @@ internal object NetworkIdentity {
             .mapNotNull { it.gateway }
             .firstOrNull { it is Inet4Address && !it.isAnyLocalAddress }
             ?.hostAddress
+    }
+
+    /**
+     * Tells apart routers that share the same factory gateway address (seen 2026-11-21: a home
+     * router and another Wi-Fi with a VPN on the router were both 192.168.x.1, so the app carried
+     * the home network's workaround over). Routers that advertise IPv6 announce themselves as DNS
+     * server or default gateway with a link-local `fe80::` address, usually derived from their MAC,
+     * which is unique and stable; the search domain (e.g. the router brand) adds a little more.
+     */
+    private fun routerIdentity(properties: LinkProperties): String {
+        val linkLocal = (properties.dnsServers.asSequence() +
+            properties.routes.asSequence().filter { it.isDefaultRoute }.mapNotNull { it.gateway })
+            .filterIsInstance<java.net.Inet6Address>()
+            .filter { it.isLinkLocalAddress }
+            .map { it.hostAddress.orEmpty().substringBefore('%') }
+            .sorted()
+            .firstOrNull()
+            .orEmpty()
+        return linkLocal + "|" + properties.domains.orEmpty()
     }
 
     private fun subscription(capabilities: NetworkCapabilities?): Int? {

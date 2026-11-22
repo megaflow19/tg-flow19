@@ -8,8 +8,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CfEdgeRouterTest {
-    private val net = 7L
-    private val other = 8L
+    private val net = "wifi:7"
+    private val other = "wifi:8"
     private val edges = listOf("e0", "e1", "e2", "e3", "e4")
 
     private fun router(clock: () -> Long = { 1_000L }) = CfEdgeRouter(clock, edges)

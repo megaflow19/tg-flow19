@@ -38,12 +38,12 @@ internal class CfEdgeRouter(
     }
 
     private val lock = Any()
-    private val states = LinkedHashMap<Long?, NetState>()
+    private val states = LinkedHashMap<String?, NetState>()
 
     /** Ordered hops for one connection attempt on [networkId]. Edges after Dns are fallbacks. */
-    fun plan(networkId: Long?): List<Hop> = synchronized(lock) {
+    fun plan(networkKey: String?): List<Hop> = synchronized(lock) {
         val now = clock()
-        val state = state(networkId)
+        val state = state(networkKey)
         val hops = ArrayList<Hop>(EDGE_ATTEMPTS + 2)
         val preferred = state.preferred?.takeIf {
             (state.edgeCooldown[it] ?: 0L) <= now && (state.edgeSuspect[it] ?: 0L) <= now
@@ -67,13 +67,13 @@ internal class CfEdgeRouter(
         return dnsIndex >= 0 && hops.indexOf(hop) > dnsIndex
     }
 
-    fun dnsWorked(networkId: Long?) = synchronized(lock) {
-        state(networkId).dnsBlockedUntil = 0L
+    fun dnsWorked(networkKey: String?) = synchronized(lock) {
+        state(networkKey).dnsBlockedUntil = 0L
     }
 
     /** [afterDnsFailure]: the DNS address failed at network level earlier in the same attempt. */
-    fun edgeWorked(networkId: Long?, hop: Hop.Edge, afterDnsFailure: Boolean) = synchronized(lock) {
-        val state = state(networkId)
+    fun edgeWorked(networkKey: String?, hop: Hop.Edge, afterDnsFailure: Boolean) = synchronized(lock) {
+        val state = state(networkKey)
         state.preferred = hop.ip
         state.edgeCooldown.remove(hop.ip)
         state.edgeSuspect.remove(hop.ip)
@@ -86,12 +86,12 @@ internal class CfEdgeRouter(
      * parallel stop trying it first for [EDGE_SUSPECT_MS], so they do not all wait out its
      * timeout. Seen 2026-11-20/21: a burst of connections each lost 5 s on the same dropped edge.
      */
-    fun edgeDropped(networkId: Long?, hop: Hop.Edge) = synchronized(lock) {
-        state(networkId).edgeSuspect[hop.ip] = clock() + EDGE_SUSPECT_MS
+    fun edgeDropped(networkKey: String?, hop: Hop.Edge) = synchronized(lock) {
+        state(networkKey).edgeSuspect[hop.ip] = clock() + EDGE_SUSPECT_MS
     }
 
-    fun edgeFailed(networkId: Long?, hop: Hop.Edge, forbidden: Boolean) = synchronized(lock) {
-        val state = state(networkId)
+    fun edgeFailed(networkKey: String?, hop: Hop.Edge, forbidden: Boolean) = synchronized(lock) {
+        val state = state(networkKey)
         state.edgeCooldown[hop.ip] = clock() + if (forbidden) EDGE_FORBIDDEN_COOLDOWN_MS else EDGE_FAIL_COOLDOWN_MS
         if (state.preferred == hop.ip) state.preferred = null
         // Next attempt starts after this edge, spreading load across ranges.
@@ -99,17 +99,32 @@ internal class CfEdgeRouter(
     }
 
     /** Addresses for an HTTP/2 lane: the remembered edge while the DNS address is blocked. */
-    fun h2Override(networkId: Long?): String? = synchronized(lock) {
-        val state = states[networkId] ?: return null
+    fun h2Override(networkKey: String?): String? = synchronized(lock) {
+        val state = states[networkKey] ?: return null
         if (state.dnsBlockedUntil <= clock()) return null
         state.preferred?.takeIf { (state.edgeCooldown[it] ?: 0L) <= clock() }
     }
 
     fun reset() = synchronized(lock) { states.clear() }
 
+    /** Same as CfTransportSelector.rekey: copy what a partial network key learned to the full one. */
+    fun rekey(from: String?, to: String) {
+        synchronized(lock) {
+            if (from == to || to in states) return
+            val partial = states[from] ?: return
+            state(to).apply {
+                preferred = partial.preferred
+                dnsBlockedUntil = partial.dnsBlockedUntil
+                edgeCooldown.putAll(partial.edgeCooldown)
+                edgeSuspect.putAll(partial.edgeSuspect)
+                cursor = partial.cursor
+            }
+        }
+    }
+
     private fun edgeHop(ip: String) = Hop.Edge(ip, edges.indexOf(ip))
 
-    private fun state(networkId: Long?): NetState = states.getOrPut(networkId) {
+    private fun state(networkKey: String?): NetState = states.getOrPut(networkKey) {
         if (states.size >= MAX_NETWORKS) states.remove(states.keys.first())
         NetState()
     }

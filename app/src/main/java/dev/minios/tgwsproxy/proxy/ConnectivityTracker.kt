@@ -71,6 +71,16 @@ class ConnectivityTracker(private val clock: () -> Long = { System.nanoTime() / 
         return true
     }
 
+    /**
+     * The same network's identity became more precise (its router's IPv6 announcement arrived
+     * after the IPv4 setup). Not a network change: pending dials and the epoch stay as they are.
+     */
+    fun updateNetworkKey(networkId: Long, networkKey: String) = synchronized(lock) {
+        val current = _state.value
+        if (current.stopped || current.networkId != networkId || current.networkKey == networkKey) return@synchronized
+        _state.value = current.copy(networkKey = networkKey)
+    }
+
     fun stop() {
         val stale: List<AutoCloseable>
         synchronized(lock) {

@@ -41,6 +41,7 @@ import dev.minios.tgwsproxy.diagnostics.withAutomaticPerformanceDefaults
 import dev.minios.tgwsproxy.diagnostics.withRuntimeConnectionPreferences
 import dev.minios.tgwsproxy.proxy.CfProxyDomains
 import dev.minios.tgwsproxy.proxy.CfTransportSelector
+import dev.minios.tgwsproxy.proxy.CfEdgeRouter
 import dev.minios.tgwsproxy.proxy.ConnectivityTracker
 import dev.minios.tgwsproxy.proxy.ConnectivitySnapshot
 import dev.minios.tgwsproxy.proxy.NetworkStatus
@@ -127,6 +128,8 @@ class ProxyService : Service() {
     private lateinit var notificationManager: NotificationManager
 
     companion object {
+        /** Network keys are hashes; the log shows only their tail to tell networks apart. */
+        private const val KEY_LOG_CHARS = 6
         private val commandScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         private val _commandFailure = MutableStateFlow<Throwable?>(null)
         val commandFailure: StateFlow<Throwable?> = _commandFailure.asStateFlow()
@@ -756,6 +759,30 @@ class ProxyService : Service() {
                 handleNetworkCandidate(network, capabilities, runtimeId, connectivity)
             }
 
+            override fun onLinkPropertiesChanged(network: Network, linkProperties: android.net.LinkProperties) {
+                synchronized(runtimeOwnershipLock) {
+                    if (stopRequested || activeRuntimeId != runtimeId || currentNetwork != network ||
+                        runtimeConnectivity !== connectivity
+                    ) return
+                    val snapshot = connectivity.state.value
+                    if (snapshot.networkId != network.networkHandle) return
+                    val key = NetworkIdentity.key(
+                        connectivityManager, network, connectivityManager.getNetworkCapabilities(network),
+                    ) ?: return
+                    val previous = snapshot.networkKey
+                    if (key == previous) return
+                    // Seen 2026-11-22: the key computed at connect time lacked the router's IPv6
+                    // address, so a reconnect to home Wi-Fi forgot the port-80 workaround.
+                    CfTransportSelector.shared.rekey(previous, key)
+                    CfEdgeRouter.shared.rekey(previous, key)
+                    connectivity.updateNetworkKey(network.networkHandle, key)
+                    DiagnosticLogger.event(
+                        "network_key_updated", "from" to previous?.takeLast(KEY_LOG_CHARS),
+                        "to" to key.takeLast(KEY_LOG_CHARS),
+                    )
+                }
+            }
+
             override fun onLost(network: Network) {
                 synchronized(runtimeOwnershipLock) {
                     if (activeRuntimeId != runtimeId || currentNetwork != network) return
@@ -830,10 +857,14 @@ class ProxyService : Service() {
                         if (stopRequested || activeRuntimeId != runtimeId || currentNetwork != network ||
                             requestedNetworkStatus != status || runtimeConnectivity !== connectivity
                         ) return@synchronized
-                        connectivity.updateNetwork(network.networkHandle, status, networkKey)
+                        // Recomputed: the router's IPv6 announcement may have arrived meanwhile.
+                        val settledKey = NetworkIdentity.key(manager, network, manager.getNetworkCapabilities(network))
+                            ?: networkKey
+                        connectivity.updateNetwork(network.networkHandle, status, settledKey)
                         DiagnosticLogger.event(
                             "network_changed", "state" to status.name, "epoch" to connectivity.state.value.epoch,
-                            "kind" to networkKind, "known" to (networkKey != null),
+                            "kind" to networkKind, "known" to (settledKey != null),
+                            "key" to settledKey?.takeLast(KEY_LOG_CHARS),
                         )
                     }
                 }

@@ -71,7 +71,7 @@ object RouteHealthProbe {
                 }
             }
         }
-        fun connectWs(cfDomain: String? = null) {
+        fun connectWs(cfDomain: String? = null, edgeIp: String? = null) {
             var ws: RawWebSocket? = null
             try {
                 ws = RawWebSocket.connectToDc(
@@ -80,9 +80,9 @@ object RouteHealthProbe {
                     connectTimeoutMs = CONNECT_TIMEOUT_MS, onSocketCreated = ::track,
                     resolveCfAddress = { domain ->
                         checkCurrent()
-                        dnsResolver.resolve(domain, connectivity, epoch)
+                        if (edgeIp != null) null else dnsResolver.resolve(domain, connectivity, epoch)
                     },
-                    cachedCfAddress = dnsResolver::cached,
+                    cachedCfAddress = { domain -> edgeIp ?: dnsResolver.cached(domain) },
                     secure = cfTransport.secure,
                     splitHello = cfTransport.splitHello,
                     isTestDc = config.forceTestDc,
@@ -97,16 +97,24 @@ object RouteHealthProbe {
                 TransportRoute.CLOUDFLARE -> {
                     if (config.forceTestDc) return
                     val domains = config.customCfDomains().ifEmpty { CfProxyDomains.getDomainsForDc(dc).take(2) }
+                    // Probe the address real connections use on this network: the Cloudflare edge
+                    // they remembered first, then the DNS address. Seen 2026-11-22: the DNS address
+                    // was blocked outright, so a DNS-only probe kept failing while traffic flowed.
+                    val edgeIp = (CfEdgeRouter.shared.plan(connectivity.state.value.transportKey)
+                        .firstOrNull() as? CfEdgeRouter.Hop.Edge)?.ip
+                    val addresses = listOfNotNull(edgeIp) + listOf<String?>(null)
                     var error: Exception? = null
                     var connected = false
-                    for (domain in domains) {
-                        checkCurrent()
-                        try {
-                            connectWs(domain)
-                            connected = true
-                            break
-                        } catch (e: CancellationException) { throw e }
-                        catch (e: Exception) { error = e }
+                    attempts@ for (domain in domains) {
+                        for (address in addresses) {
+                            checkCurrent()
+                            try {
+                                connectWs(domain, address)
+                                connected = true
+                                break@attempts
+                            } catch (e: CancellationException) { throw e }
+                            catch (e: Exception) { error = e }
+                        }
                     }
                     if (!connected) throw error ?: ProxyException("No CF domains available")
                 }

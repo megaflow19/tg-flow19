@@ -148,6 +148,12 @@ class CfTransportSelectorTest {
         assertFalse(CfTransportSelector.isDeadSession(10_027, 1_679, 797))
         assertFalse(CfTransportSelector.isDeadSession(91_317, 259, 187))
         assertFalse(CfTransportSelector.isDeadSession(30_000, 200, 0))
+        // Cut off mid-stream: 14 KB came back, then requests went unanswered until Telegram closed.
+        assertTrue(CfTransportSelector.isDeadSession(8_117, 3_660, 14_061, tailUpBytes = 1_500, tailSilentMs = 6_000))
+        // Healthy: the last request was answered moments ago, or only a ping is pending on an idle link.
+        assertFalse(CfTransportSelector.isDeadSession(16_000, 50_000, 400_000, tailUpBytes = 600, tailSilentMs = 500))
+        assertFalse(CfTransportSelector.isDeadSession(91_136, 403, 204, tailUpBytes = 120, tailSilentMs = 30_000))
+        assertFalse(CfTransportSelector.isDeadSession(91_136, 403, 204, tailUpBytes = 0, tailSilentMs = 0))
     }
 
     private class MemoryStore(var value: String? = null) : CfTransportSelector.Store {
@@ -184,6 +190,20 @@ class CfTransportSelectorTest {
         assertEquals(TLS, restarted.current(net, CfTlsMode.AUTO))
         // Plain TLS still dropped: the frozen split is skipped straight to port 80.
         assertEquals(PLAIN, restarted.sniBlocked(net, CfTlsMode.AUTO, TLS))
+    }
+
+    @Test fun rekeyCopiesPartialStateButFullKeyMemoryWins() {
+        // Learned under the partial key before the router's IPv6 announcement arrived.
+        selector.sniBlocked("wifi:partial", CfTlsMode.AUTO, TLS)
+        selector.rekey("wifi:partial", "wifi:full")
+        assertEquals(TLS_SPLIT, selector.current("wifi:full", CfTlsMode.AUTO))
+        assertEquals("copied, not moved", TLS_SPLIT, selector.current("wifi:partial", CfTlsMode.AUTO))
+
+        // The full key already knows the network: its memory is kept.
+        selector.sniBlocked("wifi:home", CfTlsMode.AUTO, TLS)
+        selector.sniBlocked("wifi:home", CfTlsMode.AUTO, TLS_SPLIT)
+        selector.rekey("wifi:partial", "wifi:home")
+        assertEquals(PLAIN, selector.current("wifi:home", CfTlsMode.AUTO))
     }
 
     @Test fun attachStoreLoadsOnceAndCorruptDataIsIgnored() {

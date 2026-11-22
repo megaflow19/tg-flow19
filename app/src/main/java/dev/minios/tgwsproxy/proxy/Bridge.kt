@@ -116,7 +116,6 @@ class Bridge internal constructor(
         if (cfDomain == null) {
             return dialVia(epoch, dc, media, target, buffer, timeout, null, CfTransport.TLS, isTestDc, edgeIp = null)
         }
-        val networkId = connectivity.state.value.networkId
         val networkKey = connectivity.state.value.transportKey
         var transport = cfTransports.current(networkKey, tlsMode)
         if (cfTransports.isBackingOff(networkKey)) {
@@ -124,11 +123,10 @@ class Bridge internal constructor(
         }
         while (true) {
             try {
-                val ws = if (transport.secure) {
-                    dialEdges(epoch, dc, media, target, buffer, timeout, cfDomain, transport, isTestDc, networkId)
-                } else {
-                    dialVia(epoch, dc, media, target, buffer, timeout, cfDomain, transport, isTestDc, edgeIp = null)
-                }
+                // Port 80 uses the same address plan: on 2026-11-22 the DNS address timed out on a
+                // network half of the time over port 80 too, costing 6 s per connection, while
+                // the alternate edges answered.
+                val ws = dialEdges(epoch, dc, media, target, buffer, timeout, cfDomain, transport, isTestDc, networkKey)
                 connectivity.recordIfCurrent(epoch) { cfTransports.worked(networkKey) }
                 ws.cfTransport = transport
                 return ws
@@ -153,8 +151,8 @@ class Bridge internal constructor(
      */
     private fun dialEdges(epoch: Long, dc: Int, media: Boolean, target: String, buffer: Int,
                           timeout: Int, cfDomain: String, transport: CfTransport,
-                          isTestDc: Boolean, networkId: Long?): RawWebSocket {
-        val hops = cfEdgeRouter.plan(networkId)
+                          isTestDc: Boolean, networkKey: String?): RawWebSocket {
+        val hops = cfEdgeRouter.plan(networkKey)
         var dnsFailed = false
         var dropped = 0
         val droppedEdges = ArrayList<CfEdgeRouter.Hop.Edge>(2)
@@ -182,11 +180,11 @@ class Bridge internal constructor(
                     // handshake earlier in this attempt is bad as an address: cool it down.
                     // Seen 2026-11-20: a remembered edge dropped every split handshake, costing
                     // each new connection a timeout before the DNS address answered.
-                    droppedEdges.forEach { cfEdgeRouter.edgeFailed(networkId, it, forbidden = false) }
+                    droppedEdges.forEach { cfEdgeRouter.edgeFailed(networkKey, it, forbidden = false) }
                     when (hop) {
-                        CfEdgeRouter.Hop.Dns -> cfEdgeRouter.dnsWorked(networkId)
+                        CfEdgeRouter.Hop.Dns -> cfEdgeRouter.dnsWorked(networkKey)
                         is CfEdgeRouter.Hop.Edge -> {
-                            cfEdgeRouter.edgeWorked(networkId, hop, afterDnsFailure = dnsFailed)
+                            cfEdgeRouter.edgeWorked(networkKey, hop, afterDnsFailure = dnsFailed)
                             DiagnosticLogger.event(
                                 "cf_edge_used", "dc" to dc, "media" to media,
                                 "edge" to hop.index, "afterDnsFailure" to dnsFailed,
@@ -200,7 +198,7 @@ class Bridge internal constructor(
             } catch (e: WsHandshakeError) {
                 if (hop is CfEdgeRouter.Hop.Edge && e.statusCode == 403) {
                     connectivity.recordIfCurrent(epoch, requireInternet = true) {
-                        cfEdgeRouter.edgeFailed(networkId, hop, forbidden = true)
+                        cfEdgeRouter.edgeFailed(networkKey, hop, forbidden = true)
                     }
                     DiagnosticLogger.event("cf_edge_failed", "edge" to hop.index, "reason" to "forbidden")
                     lastError = e
@@ -216,7 +214,7 @@ class Bridge internal constructor(
                     if (hop == CfEdgeRouter.Hop.Dns) dnsFailed = true
                     if (hop is CfEdgeRouter.Hop.Edge) {
                         droppedEdges += hop
-                        connectivity.recordIfCurrent(epoch) { cfEdgeRouter.edgeDropped(networkId, hop) }
+                        connectivity.recordIfCurrent(epoch) { cfEdgeRouter.edgeDropped(networkKey, hop) }
                         DiagnosticLogger.event("cf_edge_failed", "edge" to hop.index, "reason" to "handshake_dropped")
                     }
                     if (dropped >= CfTransportSelector.SNI_BLOCK_ADDRESSES) throw SniBlockedException(transport, e)
@@ -235,7 +233,7 @@ class Bridge internal constructor(
                     CfEdgeRouter.Hop.Dns -> dnsFailed = true
                     is CfEdgeRouter.Hop.Edge -> {
                         connectivity.recordIfCurrent(epoch, requireInternet = true) {
-                            cfEdgeRouter.edgeFailed(networkId, hop, forbidden = false)
+                            cfEdgeRouter.edgeFailed(networkKey, hop, forbidden = false)
                         }
                         DiagnosticLogger.event(
                             "cf_edge_failed", "edge" to hop.index, "reason" to (e::class.simpleName ?: "error"),
@@ -880,6 +878,20 @@ class Bridge internal constructor(
         // Which side ended the session first: "client" (Telegram closed or gave up), "upstream"
         // (the server or network closed it) or "watchdog" (closed here as frozen).
         val endedBy = java.util.concurrent.atomic.AtomicReference<String?>(null)
+        // Unanswered tail: bytes sent since the last byte came back, and when the first of them
+        // was sent. Catches flows that DPI cuts off mid-stream after 10-30 KB (seen 2026-11-21).
+        val tailLock = Any()
+        var tailUpBytes = 0L
+        var tailSince = 0L
+        fun markTailUp(bytes: Int) = synchronized(tailLock) {
+            if (tailUpBytes == 0L) tailSince = System.currentTimeMillis()
+            tailUpBytes += bytes
+        }
+        fun markTailDown() = synchronized(tailLock) { tailUpBytes = 0L }
+        // The live tail check already struck for this session (counted once per session).
+        val tailStruck = AtomicBoolean(false)
+        // Upstream writes in progress: a blocked write means data is still being pushed out.
+        val writesInFlight = java.util.concurrent.atomic.AtomicInteger(0)
         // CF over TLS (plain or split) can be frozen by DPI after the handshake: watch media
         // streams like direct WS, and step the network's CF transport down when they freeze.
         val cfStreamTransport = upstream.ws?.cfTransport
@@ -949,14 +961,39 @@ class Bridge internal constructor(
         }
 
         val stallWatchdogJob = if (
-            isMedia && (cfStreamTransport != null ||
-                (adaptiveRoutingEnabled && upstream.type == UpstreamType.WEBSOCKET))
+            cfStreamTransport != null || (isMedia && adaptiveRoutingEnabled && upstream.type == UpstreamType.WEBSOCKET)
         ) {
             launch(Dispatchers.IO) {
                 while (isActive) {
                     delay(1_000)
                     if (!connectivity.isCurrent(epoch) || !connectivity.state.value.internetConfirmed) continue
                     val now = System.currentTimeMillis()
+                    // Any CF session: requests unanswered for a while count as a strike right away
+                    // instead of when Telegram gives up (~16 s). The session is not closed: a slow
+                    // upload looks similar, so a write still pushing data out is not counted.
+                    if (cfStreamTransport != null && !tailStruck.get() && writesInFlight.get() == 0) {
+                        val silentTail = synchronized(tailLock) {
+                            tailUpBytes.takeIf {
+                                it >= CfTransportSelector.LIVE_TAIL_MIN_BYTES &&
+                                    now - tailSince >= CfTransportSelector.LIVE_TAIL_SILENT_MS
+                            }
+                        }
+                        if (silentTail != null && tailStruck.compareAndSet(false, true)) {
+                            var changedTo: CfTransport? = null
+                            connectivity.recordIfCurrent(epoch, requireInternet = true) {
+                                changedTo = cfTransports.streamStalled(
+                                    connectivity.state.value.transportKey, cfTlsMode, cfStreamTransport,
+                                )
+                            }
+                            DiagnosticLogger.event(
+                                "cf_stream_stalled", "dc" to dc, "media" to isMedia,
+                                "transport" to cfStreamTransport.name, "reason" to "unanswered",
+                                "tailUpBytes" to silentTail, "sessionBytesDown" to downBytes,
+                                "switchedTo" to changedTo?.name,
+                            )
+                        }
+                    }
+                    if (!isMedia) continue
                     val stalledTraffic = synchronized(pendingLock) {
                         if (DirectWsCircuitBreaker.isStalled(
                                 pendingSince = pendingSince,
@@ -1043,6 +1080,7 @@ class Bridge internal constructor(
                     lastActivityAt.set(System.currentTimeMillis())
                     upBytes += read
                     upPackets++
+                    markTailUp(read)
 
                     // Decrypt from client, re-encrypt for telegram
                     val decrypted = cryptoCtx.clientDecryptor.update(data)
@@ -1050,18 +1088,23 @@ class Bridge internal constructor(
 
                     when (upstream.type) {
                         UpstreamType.WEBSOCKET, UpstreamType.CFPROXY -> {
-                            if (splitter != null) {
-                                val parts = splitter.split(reencrypted, decrypted)
-                                if (parts.isEmpty()) continue
-                                if (trackPending) markDirectRequest(read)
-                                if (parts.size > 1) {
-                                    upstream.ws!!.sendBatch(parts)
+                            writesInFlight.incrementAndGet()
+                            try {
+                                if (splitter != null) {
+                                    val parts = splitter.split(reencrypted, decrypted)
+                                    if (parts.isEmpty()) continue
+                                    if (trackPending) markDirectRequest(read)
+                                    if (parts.size > 1) {
+                                        upstream.ws!!.sendBatch(parts)
+                                    } else {
+                                        upstream.ws!!.sendBinary(parts[0])
+                                    }
                                 } else {
-                                    upstream.ws!!.sendBinary(parts[0])
+                                    if (trackPending) markDirectRequest(read)
+                                    upstream.ws!!.sendBinary(reencrypted)
                                 }
-                            } else {
-                                if (trackPending) markDirectRequest(read)
-                                upstream.ws!!.sendBinary(reencrypted)
+                            } finally {
+                                writesInFlight.decrementAndGet()
                             }
                         }
                         UpstreamType.TCP -> {
@@ -1088,6 +1131,7 @@ class Bridge internal constructor(
                             lastActivityAt.set(System.currentTimeMillis())
                             downBytes += data.size
                             downPackets++
+                            markTailDown()
                             if (trackPending) markDirectResponse(data.size)
 
                             // Decrypt from telegram, re-encrypt for client
@@ -1109,6 +1153,7 @@ class Bridge internal constructor(
                             lastActivityAt.set(System.currentTimeMillis())
                             downBytes += read
                             downPackets++
+                            markTailDown()
 
                             val data = buf.copyOf(read)
                             val decrypted = cryptoCtx.telegramDecryptor.update(data)
@@ -1138,13 +1183,18 @@ class Bridge internal constructor(
             pingJob?.cancel()
             stallWatchdogJob?.cancel()
 
-            val durationMs = System.currentTimeMillis() - startTime
-            // A CF session that got (almost) nothing back counts like a frozen stream: Telegram
-            // closes such connections within seconds, before the media watchdog would fire.
+            val endedAt = System.currentTimeMillis()
+            val durationMs = endedAt - startTime
+            val (tailUp, tailSilentMs) = synchronized(tailLock) {
+                tailUpBytes to (if (tailUpBytes > 0L) endedAt - tailSince else 0L)
+            }
+            // A CF session that got (almost) nothing back, or whose requests stopped being
+            // answered mid-stream, counts like a frozen stream: Telegram closes such connections
+            // within seconds, before the media watchdog would fire.
             var deadSession = false
             var switchedTo: CfTransport? = null
-            if (cfStreamTransport != null && !stalled.get() &&
-                CfTransportSelector.isDeadSession(durationMs, upBytes, downBytes)
+            if (cfStreamTransport != null && !stalled.get() && !tailStruck.get() &&
+                CfTransportSelector.isDeadSession(durationMs, upBytes, downBytes, tailUp, tailSilentMs)
             ) {
                 connectivity.recordIfCurrent(epoch, requireInternet = true) {
                     deadSession = true
@@ -1172,8 +1222,10 @@ class Bridge internal constructor(
                 "packetsDown" to downPackets,
                 "stalled" to stalled.get(),
                 "endedBy" to endedBy.get(),
+                "tailUpBytes" to tailUp,
+                "tailSilentMs" to tailSilentMs,
                 "transport" to upstream.ws?.cfTransport?.name,
-                "dead" to deadSession,
+                "dead" to (deadSession || tailStruck.get()),
                 "switchedTo" to switchedTo?.name,
             )
         }

@@ -67,7 +67,7 @@ class CfEdgeRouterTest {
         val hops = r.plan(net)
         assertEquals(Hop.Edge("e0", 0), hops[0])
         assertEquals(Hop.Dns, hops[1])
-        assertNull("no override once DNS is retried", r.h2Override(net))
+        assertEquals("HTTP/2 follows the edge WebSocket tries first", "e0", r.h2Override(net))
     }
 
     @Test fun edgeThatWorksWhileDnsIsFineDoesNotBlockDns() {
@@ -76,7 +76,7 @@ class CfEdgeRouterTest {
         val hops = r.plan(net)
         assertEquals(Hop.Edge("e2", 2), hops[0])
         assertTrue(hops.contains(Hop.Dns))
-        assertNull(r.h2Override(net))
+        assertEquals("e2", r.h2Override(net))
     }
 
     @Test fun failedEdgesCoolDownAndForbiddenOnesLonger() {

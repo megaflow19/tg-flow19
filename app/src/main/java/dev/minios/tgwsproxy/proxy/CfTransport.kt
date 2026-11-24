@@ -200,8 +200,8 @@ internal class CfTransportSelector(
      * Telegram closes such connections itself after 4-8 s, before a 6 s watchdog fires, so the
      * session ends count too. [STALL_STRIKES] strikes within [STALL_WINDOW_MS] step this network
      * down; strikes closer than [STALL_DEDUP_MS] count once (Telegram closes several sessions at
-     * once when it goes to the background). A frozen split is avoided for [AVOID_SPLIT_MS], twice
-     * as long after each further freeze here (up to [AVOID_SPLIT_MAX_MS]), so rechecks skip it.
+     * once when it goes to the background). A frozen split is avoided for [AVOID_SPLIT_MS], longer
+     * after each further freeze here (see [avoidSplitDuration]), so rechecks skip it.
      * Seen 2026-11-24: the split froze again on two networks the day after its 24 h avoidance.
      * Returns the transport now in use when this strike changed it, else null.
      */
@@ -292,7 +292,8 @@ internal class CfTransportSelector(
                 transport = entry.transport
                 since = entry.since
                 avoidSplitUntil = entry.avoidSplitUntil
-                splitFreezes = entry.splitFreezes
+                // 1.0.4 and older did not count freezes, but only set the avoidance after one.
+                splitFreezes = if (entry.splitFreezes == 0 && entry.avoidSplitUntil > 0L) 1 else entry.splitFreezes
                 recheckFailures = entry.recheckFailures
                 recheckAt = when {
                     entry.recheckAt > 0L -> entry.recheckAt
@@ -371,8 +372,16 @@ internal class CfTransportSelector(
         fun recheckInterval(failures: Int): Long =
             (RECHECK_MS shl failures.coerceIn(0, 16)).coerceAtMost(RECHECK_MAX_MS)
 
-        fun avoidSplitDuration(freezes: Int): Long =
-            (AVOID_SPLIT_MS shl (freezes - 1).coerceIn(0, 16)).coerceAtMost(AVOID_SPLIT_MAX_MS)
+        /**
+         * 1 day, then 7, then 30 days. Each retry costs Telegram a frozen minute (seen 2026-11-25:
+         * the split passed a recheck handshake, then froze all media for 50 s), and on networks
+         * seen so far a split that froze once kept freezing.
+         */
+        fun avoidSplitDuration(freezes: Int): Long = when {
+            freezes <= 1 -> AVOID_SPLIT_MS
+            freezes == 2 -> AVOID_SPLIT_MS * 7
+            else -> AVOID_SPLIT_MAX_MS
+        }
         /**
          * Live check on open CF sessions: this many bytes sent after the last byte came back and
          * unanswered this long count as a strike before Telegram gives up on the connection.

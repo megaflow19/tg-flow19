@@ -77,6 +77,21 @@ class CfH2Pool internal constructor(
         /** Process-wide: a proxy that refuses HTTP/2 does so after runtime restarts too. */
         @Volatile internal var rejectedUntil = 0L
         const val REJECTED_COOLDOWN_MS = 30 * 60_000L
+
+        /**
+         * Networks (by transport key) where an HTTP/2 lane setup timed out: media skips HTTP/2
+         * there for [SETUP_TIMEOUT_PAUSE_MS] and goes over WebSocket at once, instead of waiting
+         * out the setup on every new media connection.
+         */
+        private val setupTimedOutUntil = ConcurrentHashMap<String, Long>()
+        const val SETUP_TIMEOUT_PAUSE_MS = 10 * 60_000L
+
+        internal fun pausedOn(networkKey: String?, now: Long = System.currentTimeMillis()): Boolean =
+            (setupTimedOutUntil[networkKey.orEmpty()] ?: 0L) > now
+
+        internal fun setupTimedOut(networkKey: String?, now: Long = System.currentTimeMillis()) {
+            setupTimedOutUntil[networkKey.orEmpty()] = now + SETUP_TIMEOUT_PAUSE_MS
+        }
     }
 
     fun reset() {
@@ -91,6 +106,8 @@ class CfH2Pool internal constructor(
     fun open(dc: Int, domains: List<String>, epoch: Long): Channel? {
         if (dc !in MtProtoConstants.DC_IPS) return null
         if (rejectedUntil > System.currentTimeMillis()) return null
+        val networkKey = connectivity.state.value.transportKey
+        if (pausedOn(networkKey)) return null
         val currentGeneration = generation.get()
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8)
         for (domain in domains.sortedBy { it != activeDomains[dc] }) {
@@ -129,6 +146,12 @@ class CfH2Pool internal constructor(
                             retryAfter[host] = System.currentTimeMillis() + 30_000
                         }
                         DiagnosticLogger.failure("h2_setup_failed", e, "dc" to dc)
+                        if (e is java.io.InterruptedIOException && connectivity.isCurrent(epoch)) {
+                            setupTimedOut(networkKey)
+                            DiagnosticLogger.event("h2_paused", "reason" to "setup_timeout",
+                                "pauseMs" to SETUP_TIMEOUT_PAUSE_MS)
+                            return null
+                        }
                     }
                 }
             }

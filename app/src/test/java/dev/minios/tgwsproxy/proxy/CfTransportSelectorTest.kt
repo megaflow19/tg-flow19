@@ -152,7 +152,7 @@ class CfTransportSelectorTest {
         assertEquals(listOf(TLS, TLS_SPLIT), selector.recheckPlan(net, CfTlsMode.AUTO))
     }
 
-    @Test fun splitThatFreezesAgainIsAvoidedTwiceAsLong() {
+    @Test fun splitThatFreezesAgainIsAvoidedLonger() {
         val day = CfTransportSelector.AVOID_SPLIT_MS
         fun freezeSplit() {
             selector.recheckDone(net, CfTlsMode.AUTO, working = TLS_SPLIT, conclusive = true)
@@ -163,7 +163,7 @@ class CfTransportSelectorTest {
         selector.sniBlocked(net, CfTlsMode.AUTO, TLS)
         repeat(CfTransportSelector.STALL_STRIKES) { strike(CfTlsMode.AUTO, TLS_SPLIT) }
         now += day
-        for (avoided in listOf(2 * day, 4 * day, 8 * day, 16 * day, 30 * day, 30 * day)) {
+        for (avoided in listOf(7 * day, 30 * day, 30 * day)) {
             freezeSplit()
             // Rechecks (at most daily) run meanwhile but skip the split until the avoidance ends.
             now += avoided - 1
@@ -276,14 +276,30 @@ class CfTransportSelectorTest {
         // The step is kept (no hourly reset), and the recheck that is now due offers the split.
         assertEquals(PLAIN, restarted.current(net, CfTlsMode.AUTO))
         assertEquals(listOf(TLS, TLS_SPLIT), restarted.recheckPlan(net, CfTlsMode.AUTO))
-        // The earlier freeze is remembered: the next one doubles the avoidance.
+        // The earlier freeze is remembered: the next one avoids the split for a week.
         restarted.recheckDone(net, CfTlsMode.AUTO, working = TLS_SPLIT, conclusive = true)
         repeat(CfTransportSelector.STALL_STRIKES) {
             now += CfTransportSelector.STALL_DEDUP_MS
             restarted.streamStalled(net, CfTlsMode.AUTO, TLS_SPLIT)
         }
-        now += CfTransportSelector.AVOID_SPLIT_MS * 2 - 10_000L
+        now += CfTransportSelector.AVOID_SPLIT_MS * 7 - 10_000L
         assertEquals(listOf(TLS), restarted.recheckPlan(net, CfTlsMode.AUTO))
+    }
+
+    @Test fun splitAvoidanceSavedByOlderVersionCountsAsAFreeze() {
+        val until = now + 1_000L
+        val store = MemoryStore("""[{"key":"$net","transport":"PLAIN","since":$now,"avoidSplitUntil":$until}]""")
+        val restarted = CfTransportSelector({ now }, store)
+        now = until + CfTransportSelector.RECHECK_MS
+        restarted.recheckDone(net, CfTlsMode.AUTO, working = TLS_SPLIT, conclusive = true)
+        repeat(CfTransportSelector.STALL_STRIKES) { strikeOn(restarted) }
+        now += CfTransportSelector.AVOID_SPLIT_MS * 7 - 10_000L
+        assertEquals("second freeze: a week", listOf(TLS), restarted.recheckPlan(net, CfTlsMode.AUTO))
+    }
+
+    private fun strikeOn(selector: CfTransportSelector) {
+        now += CfTransportSelector.STALL_DEDUP_MS
+        selector.streamStalled(net, CfTlsMode.AUTO, TLS_SPLIT)
     }
 
     @Test fun stepSavedByOlderVersionIsRecheckedAnHourAfterItWasTaken() {

@@ -98,11 +98,16 @@ internal class CfEdgeRouter(
         state.cursor = (hop.index + 1) % edges.size
     }
 
-    /** Addresses for an HTTP/2 lane: the remembered edge while the DNS address is blocked. */
+    /**
+     * Address for an HTTP/2 lane: the edge WebSocket connections try first on this network.
+     * Seen 2026-11-25 on a mobile network: plain TLS passed only via the remembered edge, while
+     * the DNS address dropped it; HTTP/2 lanes kept dialing the DNS address and media waited 8 s
+     * per attempt, though WebSocket connections over the edge worked.
+     */
     fun h2Override(networkKey: String?): String? = synchronized(lock) {
         val state = states[networkKey] ?: return null
-        if (state.dnsBlockedUntil <= clock()) return null
-        state.preferred?.takeIf { (state.edgeCooldown[it] ?: 0L) <= clock() }
+        val now = clock()
+        state.preferred?.takeIf { (state.edgeCooldown[it] ?: 0L) <= now && (state.edgeSuspect[it] ?: 0L) <= now }
     }
 
     fun reset() = synchronized(lock) { states.clear() }

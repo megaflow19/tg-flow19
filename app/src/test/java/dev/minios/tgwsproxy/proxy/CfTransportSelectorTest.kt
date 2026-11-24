@@ -46,13 +46,74 @@ class CfTransportSelectorTest {
         assertEquals(TLS_SPLIT, selector.current(net, CfTlsMode.AUTO))
     }
 
-    @Test fun rememberedStepExpiresSoPlainTlsIsRetried() {
+    @Test fun rememberedStepStaysAndPlainTlsIsRecheckedInTheBackground() {
+        assertTrue(selector.recheckPlan(net, CfTlsMode.AUTO).isEmpty())
         selector.sniBlocked(net, CfTlsMode.AUTO, TLS)
         now += CfTransportSelector.RECHECK_MS - 1
-        assertEquals(TLS_SPLIT, selector.current(net, CfTlsMode.AUTO))
+        assertTrue(selector.recheckPlan(net, CfTlsMode.AUTO).isEmpty())
         now += 1
+        // Live connections keep the working step while the recheck runs.
+        assertEquals(listOf(TLS), selector.recheckPlan(net, CfTlsMode.AUTO))
+        assertEquals(TLS_SPLIT, selector.current(net, CfTlsMode.AUTO))
+        assertTrue(selector.recheckPlan(net, CfTlsMode.OFF).isEmpty())
+        selector.recheckDone(net, CfTlsMode.AUTO, working = TLS, conclusive = true)
         assertEquals(TLS, selector.current(net, CfTlsMode.AUTO))
-        assertEquals(TLS_SPLIT, selector.sniBlocked(net, CfTlsMode.AUTO, TLS))
+        assertTrue(selector.recheckPlan(net, CfTlsMode.AUTO).isEmpty())
+    }
+
+    @Test fun failedRechecksDoubleTheIntervalUpToADay() {
+        selector.sniBlocked(net, CfTlsMode.AUTO, TLS)
+        selector.sniBlocked(net, CfTlsMode.AUTO, TLS_SPLIT)
+        val hour = CfTransportSelector.RECHECK_MS
+        now += hour
+        for (expected in listOf(2 * hour, 4 * hour, 8 * hour, 16 * hour, 24 * hour, 24 * hour)) {
+            assertFalse(selector.recheckPlan(net, CfTlsMode.AUTO).isEmpty())
+            selector.recheckDone(net, CfTlsMode.AUTO, working = null, conclusive = true)
+            now += expected - 1
+            assertTrue(selector.recheckPlan(net, CfTlsMode.AUTO).isEmpty())
+            now += 1
+        }
+        assertEquals(PLAIN, selector.current(net, CfTlsMode.AUTO))
+    }
+
+    @Test fun tlsThatPassesRecheckButFreezesIsRecheckedLessOften() {
+        selector.sniBlocked(net, CfTlsMode.AUTO, TLS)
+        now += CfTransportSelector.RECHECK_MS
+        selector.recheckDone(net, CfTlsMode.AUTO, working = TLS, conclusive = true)
+        repeat(CfTransportSelector.STALL_STRIKES) { strike(CfTlsMode.AUTO, TLS) }
+        assertEquals(TLS_SPLIT, selector.current(net, CfTlsMode.AUTO))
+        now += CfTransportSelector.RECHECK_MS * 2 - 1
+        assertTrue(selector.recheckPlan(net, CfTlsMode.AUTO).isEmpty())
+        now += 1
+        selector.recheckDone(net, CfTlsMode.AUTO, working = TLS, conclusive = true)
+        repeat(CfTransportSelector.STALL_STRIKES) { strike(CfTlsMode.AUTO, TLS) }
+        now += CfTransportSelector.RECHECK_MS * 4 - 1
+        assertTrue("the count survives a passing recheck", selector.recheckPlan(net, CfTlsMode.AUTO).isEmpty())
+    }
+
+    @Test fun inconclusiveRecheckIsRetriedSoonWithoutCounting() {
+        selector.sniBlocked(net, CfTlsMode.AUTO, TLS)
+        now += CfTransportSelector.RECHECK_MS
+        selector.recheckDone(net, CfTlsMode.AUTO, working = null, conclusive = false)
+        assertTrue(selector.recheckPlan(net, CfTlsMode.AUTO).isEmpty())
+        now += CfTransportSelector.RECHECK_RETRY_MS
+        assertFalse(selector.recheckPlan(net, CfTlsMode.AUTO).isEmpty())
+        selector.recheckDone(net, CfTlsMode.AUTO, working = null, conclusive = true)
+        now += CfTransportSelector.RECHECK_MS * 2 - 1
+        assertTrue("first real failure: 2 h", selector.recheckPlan(net, CfTlsMode.AUTO).isEmpty())
+        now += 1
+        assertFalse(selector.recheckPlan(net, CfTlsMode.AUTO).isEmpty())
+    }
+
+    @Test fun recheckFromPortEightyAlsoTriesTheSplit() {
+        selector.sniBlocked(net, CfTlsMode.AUTO, TLS)
+        selector.sniBlocked(net, CfTlsMode.AUTO, TLS_SPLIT)
+        now += CfTransportSelector.RECHECK_MS
+        assertEquals(listOf(TLS, TLS_SPLIT), selector.recheckPlan(net, CfTlsMode.AUTO))
+        selector.recheckDone(net, CfTlsMode.AUTO, working = TLS_SPLIT, conclusive = true)
+        assertEquals(TLS_SPLIT, selector.current(net, CfTlsMode.AUTO))
+        now += CfTransportSelector.RECHECK_MS * 2
+        assertEquals(listOf(TLS), selector.recheckPlan(net, CfTlsMode.AUTO))
     }
 
     @Test fun exhaustedLadderBacksOffBrieflyAndSuccessClearsIt() {
@@ -80,14 +141,37 @@ class CfTransportSelectorTest {
         assertEquals(TLS_SPLIT, selector.current(net, CfTlsMode.AUTO))
         assertEquals(PLAIN, strike(CfTlsMode.AUTO, TLS_SPLIT))
         assertEquals(PLAIN, selector.current(net, CfTlsMode.AUTO))
-        // Hourly recheck tries plain TLS; when it is dropped again, the frozen split is skipped.
+        // The recheck tries only plain TLS while the frozen split is avoided.
         now += CfTransportSelector.RECHECK_MS
-        assertEquals(TLS, selector.current(net, CfTlsMode.AUTO))
+        assertEquals(listOf(TLS), selector.recheckPlan(net, CfTlsMode.AUTO))
+        // A step-down from TLS after a recheck skips the frozen split too.
+        selector.recheckDone(net, CfTlsMode.AUTO, working = TLS, conclusive = true)
         assertEquals(PLAIN, selector.sniBlocked(net, CfTlsMode.AUTO, TLS))
         // After the avoid period the split is offered again.
         now += CfTransportSelector.AVOID_SPLIT_MS
-        assertEquals(TLS, selector.current(net, CfTlsMode.AUTO))
-        assertEquals(TLS_SPLIT, selector.sniBlocked(net, CfTlsMode.AUTO, TLS))
+        assertEquals(listOf(TLS, TLS_SPLIT), selector.recheckPlan(net, CfTlsMode.AUTO))
+    }
+
+    @Test fun splitThatFreezesAgainIsAvoidedTwiceAsLong() {
+        val day = CfTransportSelector.AVOID_SPLIT_MS
+        fun freezeSplit() {
+            selector.recheckDone(net, CfTlsMode.AUTO, working = TLS_SPLIT, conclusive = true)
+            assertEquals(TLS_SPLIT, selector.current(net, CfTlsMode.AUTO))
+            repeat(CfTransportSelector.STALL_STRIKES) { strike(CfTlsMode.AUTO, TLS_SPLIT) }
+            assertEquals(PLAIN, selector.current(net, CfTlsMode.AUTO))
+        }
+        selector.sniBlocked(net, CfTlsMode.AUTO, TLS)
+        repeat(CfTransportSelector.STALL_STRIKES) { strike(CfTlsMode.AUTO, TLS_SPLIT) }
+        now += day
+        for (avoided in listOf(2 * day, 4 * day, 8 * day, 16 * day, 30 * day, 30 * day)) {
+            freezeSplit()
+            // Rechecks (at most daily) run meanwhile but skip the split until the avoidance ends.
+            now += avoided - 1
+            assertEquals(listOf(TLS), selector.recheckPlan(net, CfTlsMode.AUTO))
+            now += 1
+            assertEquals(listOf(TLS, TLS_SPLIT), selector.recheckPlan(net, CfTlsMode.AUTO))
+        }
+        assertEquals(30 * day, CfTransportSelector.avoidSplitDuration(99))
     }
 
     @Test fun stallsFarApartDoNotStepDown() {
@@ -175,7 +259,7 @@ class CfTransportSelectorTest {
         assertEquals(TLS, restarted.current("wifi:other", CfTlsMode.AUTO))
     }
 
-    @Test fun savedStepExpiresButSplitAvoidanceIsKept() {
+    @Test fun savedStepRecheckScheduleAndSplitFreezesSurviveRestart() {
         val store = MemoryStore()
         val first = CfTransportSelector({ now }, store)
         first.sniBlocked(net, CfTlsMode.AUTO, TLS)
@@ -185,11 +269,31 @@ class CfTransportSelectorTest {
         }
         assertEquals(PLAIN, first.current(net, CfTlsMode.AUTO))
         now += CfTransportSelector.RECHECK_MS
+        first.recheckDone(net, CfTlsMode.AUTO, working = null, conclusive = true)
+        now += CfTransportSelector.AVOID_SPLIT_MS
 
         val restarted = CfTransportSelector({ now }, store)
-        assertEquals(TLS, restarted.current(net, CfTlsMode.AUTO))
-        // Plain TLS still dropped: the frozen split is skipped straight to port 80.
-        assertEquals(PLAIN, restarted.sniBlocked(net, CfTlsMode.AUTO, TLS))
+        // The step is kept (no hourly reset), and the recheck that is now due offers the split.
+        assertEquals(PLAIN, restarted.current(net, CfTlsMode.AUTO))
+        assertEquals(listOf(TLS, TLS_SPLIT), restarted.recheckPlan(net, CfTlsMode.AUTO))
+        // The earlier freeze is remembered: the next one doubles the avoidance.
+        restarted.recheckDone(net, CfTlsMode.AUTO, working = TLS_SPLIT, conclusive = true)
+        repeat(CfTransportSelector.STALL_STRIKES) {
+            now += CfTransportSelector.STALL_DEDUP_MS
+            restarted.streamStalled(net, CfTlsMode.AUTO, TLS_SPLIT)
+        }
+        now += CfTransportSelector.AVOID_SPLIT_MS * 2 - 10_000L
+        assertEquals(listOf(TLS), restarted.recheckPlan(net, CfTlsMode.AUTO))
+    }
+
+    @Test fun stepSavedByOlderVersionIsRecheckedAnHourAfterItWasTaken() {
+        val store = MemoryStore("""[{"key":"$net","transport":"PLAIN","since":$now,"avoidSplitUntil":0}]""")
+        now += CfTransportSelector.RECHECK_MS - 1
+        val restarted = CfTransportSelector({ now }, store)
+        assertEquals(PLAIN, restarted.current(net, CfTlsMode.AUTO))
+        assertTrue(restarted.recheckPlan(net, CfTlsMode.AUTO).isEmpty())
+        now += 1
+        assertEquals(listOf(TLS, TLS_SPLIT), restarted.recheckPlan(net, CfTlsMode.AUTO))
     }
 
     @Test fun rekeyCopiesPartialStateButFullKeyMemoryWins() {

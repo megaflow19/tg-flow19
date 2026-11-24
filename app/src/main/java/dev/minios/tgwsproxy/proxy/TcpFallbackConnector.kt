@@ -6,6 +6,8 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import kotlinx.coroutines.CancellationException
 
+private const val RELAY_INIT_TIMEOUT_MS = 10_000L
+
 internal class TcpFallbackConnector(
     private val clock: () -> Long = SystemClock::elapsedRealtime,
     private val socketFactory: () -> Socket = ::Socket,
@@ -34,6 +36,8 @@ internal class TcpFallbackConnector(
         relayInit: ByteArray,
         canRecordFailure: () -> Boolean = { true },
         isActive: () -> Boolean = { true },
+        onSocketCreated: (Socket) -> Unit = {},
+        relayInitTimeoutMs: Long = RELAY_INIT_TIMEOUT_MS,
     ): Socket? {
         val endpoint = Endpoint(ip, port)
         val socket = synchronized(lock) {
@@ -44,15 +48,19 @@ internal class TcpFallbackConnector(
         }
         var adopted = false
         try {
+            onSocketCreated(socket)
             if (!isActive()) throw CancellationException("TCP fallback cancelled")
             socket.tcpNoDelay = true
             socket.keepAlive = true
             socket.sendBufferSize = bufferSize
             socket.receiveBufferSize = bufferSize
             socket.connect(InetSocketAddress(ip, port), 10_000)
-            socket.getOutputStream().apply {
-                write(relayInit)
-                flush()
+            // The first write has a deadline too (see SetupDeadline); streaming after it has none.
+            SetupDeadline.bounded(relayInitTimeoutMs, close = { socket.close() }) {
+                socket.getOutputStream().apply {
+                    write(relayInit)
+                    flush()
+                }
             }
             if (!isActive()) throw CancellationException("TCP fallback cancelled")
             synchronized(lock) {

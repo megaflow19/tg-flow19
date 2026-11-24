@@ -38,6 +38,7 @@ class TgWsProxyServer(
     private var wsPool: WsPool? = null
     private var scope: CoroutineScope? = null
     private var statsJob: Job? = null
+    private var recheckJob: Job? = null
     private val stoppedLatch = CountDownLatch(1)
 
     // Throttle invalid handshake log spam
@@ -186,6 +187,19 @@ class TgWsProxyServer(
                     Log.i(TAG, "stats: ${ProxyStats.formatStats()} | ws_bl: ${bridge.blacklistSummary()}")
                 }
             }
+            // Background recheck of a lower Cloudflare step (CfTransportSelector.recheckPlan).
+            recheckJob = scope!!.launch {
+                while (isActive) {
+                    delay(CF_RECHECK_POLL_MS)
+                    try {
+                        bridge.recheckCfTransport(config)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        DiagnosticLogger.failure("cf_transport_recheck_failed", e)
+                    }
+                }
+            }
 
             listening.set(true)
             DiagnosticLogger.event(
@@ -280,6 +294,8 @@ class TgWsProxyServer(
         val wasListening = listening.getAndSet(false)
         statsJob?.cancel()
         statsJob = null
+        recheckJob?.cancel()
+        recheckJob = null
         wsPool?.stop()
         wsPool = null
         tcpFallback.reset(enabled = false)
@@ -360,7 +376,8 @@ class TgWsProxyServer(
         }
 
         try {
-            var input = clientSocket.getInputStream()
+            val wireInput = ClientSetupInput(clientSocket)
+            var input: java.io.InputStream = wireInput
             var output = clientSocket.getOutputStream()
 
             // Set handshake read timeout (10s, matching Python asyncio.wait_for(..., timeout=10))
@@ -459,34 +476,42 @@ class TgWsProxyServer(
                 telegramEncryptor = relayInit.telegramEncryptor,
             )
 
-            val upstream = bridge.connectUpstream(
-                dc = absDc,
-                isMedia = isMedia,
-                config = if (isTestDc) config.copy(forceTestDc = true) else config,
-                pool = wsPool,
-                protoTag = handshake.protoTag,
-                relayInit = relayInit.initPacket,
-                tcpFallback = tcpFallback,
-                epoch = epoch,
-            )
-            if (!connectivity.recordIfCurrent(epoch) {
-                if (running.get() && !stopRequested.get()) activeUpstreams.add(upstream)
-            } || upstream !in activeUpstreams) {
-                upstream.abort()
+            // Telegram may give up while upstream is still being dialed: then dialing stops.
+            val upstream = try {
+                wireInput.duringUpstreamSetup(Bridge.UpstreamConnection::abort) {
+                    bridge.connectUpstream(
+                        dc = absDc,
+                        isMedia = isMedia,
+                        config = if (isTestDc) config.copy(forceTestDc = true) else config,
+                        pool = wsPool,
+                        protoTag = handshake.protoTag,
+                        relayInit = relayInit.initPacket,
+                        tcpFallback = tcpFallback,
+                        epoch = epoch,
+                    )
+                }
+            } catch (e: CancellationException) {
+                currentCoroutineContext().ensureActive()
+                if (e.message?.startsWith("Local client") == true) {
+                    DiagnosticLogger.event("upstream_setup_cancelled", "dc" to absDc, "media" to isMedia)
+                }
                 return
             }
-            DiagnosticLogger.event(
-                "upstream_connected",
-                "dc" to absDc,
-                "media" to isMedia,
-                "route" to upstream.type,
-            )
-
-            if (globalVerbose) {
-                Log.d(TAG, "Upstream connected: ${upstream.type} for DC $absDc from $clientAddr")
-            }
-
             try {
+                if (!connectivity.recordIfCurrent(epoch) {
+                    if (running.get() && !stopRequested.get()) activeUpstreams.add(upstream)
+                } || upstream !in activeUpstreams) return
+                DiagnosticLogger.event(
+                    "upstream_connected",
+                    "dc" to absDc,
+                    "media" to isMedia,
+                    "route" to upstream.type,
+                )
+
+                if (globalVerbose) {
+                    Log.d(TAG, "Upstream connected: ${upstream.type} for DC $absDc from $clientAddr")
+                }
+
                 bridge.bridgeReencrypt(
                     clientInput = input,
                     clientOutput = output,
@@ -572,6 +597,8 @@ class TgWsProxyServer(
         // Verbose logging — set to BuildConfig.DEBUG by the service layer at startup.
         @Volatile
         var globalVerbose: Boolean = false
+
+        private const val CF_RECHECK_POLL_MS = 60_000L
     }
 }
 

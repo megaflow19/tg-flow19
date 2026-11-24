@@ -94,9 +94,12 @@ class Bridge internal constructor(
     private val CF_DNS_TIMEOUT_MS = 6_000
     private val DIRECT_IP_FAIL_COOLDOWN_MS = 60 * 60_000L
     private val CF_FALLBACK_PARALLELISM = 2
+    private val RELAY_INIT_TIMEOUT_MS = 10_000L
+    private val RECHECK_DC = 2
 
     private fun checkEpoch(epoch: Long) {
         if (!connectivity.isCurrent(epoch)) throw CancellationException("Connectivity changed")
+        UpstreamSetupGuard.checkActive()
     }
 
     private fun record(epoch: Long, dc: Int, media: Boolean, route: TransportRoute, phase: RoutePhase) {
@@ -114,7 +117,9 @@ class Bridge internal constructor(
                      timeout: Int, cfDomain: String? = null, tlsMode: CfTlsMode = CfTlsMode.AUTO,
                      isTestDc: Boolean = false): RawWebSocket {
         if (cfDomain == null) {
-            return dialVia(epoch, dc, media, target, buffer, timeout, null, CfTransport.TLS, isTestDc, edgeIp = null)
+            // Direct WebSocket: the whole setup (TCP, TLS, upgrade) within the timeout, not each read.
+            return dialVia(epoch, dc, media, target, buffer, timeout, null, CfTransport.TLS, isTestDc,
+                edgeIp = null, deadlineMs = timeout.toLong())
         }
         val networkKey = connectivity.state.value.transportKey
         var transport = cfTransports.current(networkKey, tlsMode)
@@ -142,6 +147,45 @@ class Bridge internal constructor(
     }
 
     /**
+     * Background recheck of the CF transport on the current network (see
+     * [CfTransportSelector.recheckPlan]): one test handshake per higher step, off the connections
+     * Telegram uses. A step works when its handshake passes; an HTTP answer counts too (the name
+     * got through). Dropped handshakes mean still blocked; network-level failures prove nothing.
+     */
+    internal fun recheckCfTransport(config: ProxyConfig) {
+        if (config.forceTestDc || !config.cfProxyEnabled) return
+        val snapshot = connectivity.state.value
+        if (!snapshot.allowsBackgroundWork) return
+        val networkKey = snapshot.transportKey
+        val plan = cfTransports.recheckPlan(networkKey, config.cfTlsMode)
+        if (plan.isEmpty()) return
+        val epoch = snapshot.epoch
+        val domain = config.customCfDomains().firstOrNull() ?: CfProxyDomains.getDomainsForDc(RECHECK_DC).firstOrNull() ?: return
+        var working: CfTransport? = null
+        var conclusive = true
+        for (transport in plan) {
+            try {
+                dialEdges(epoch, RECHECK_DC, false, domain, config.bufferSize, CF_DNS_TIMEOUT_MS, domain,
+                    transport, config.forceTestDc, networkKey, probe = true).abort()
+                working = transport
+                break
+            } catch (e: CancellationException) {
+                return
+            } catch (e: WsHandshakeError) {
+                working = transport
+                break
+            } catch (e: Exception) {
+                if (e is SniBlockedException || e is TlsHandshakeDropped) continue
+                conclusive = false
+                break
+            }
+        }
+        // The network changed meanwhile: the result belongs to another network.
+        if (!connectivity.isCurrent(epoch)) return
+        cfTransports.recheckDone(networkKey, config.cfTlsMode, working, conclusive)
+    }
+
+    /**
      * One TLS transport over [CfEdgeRouter]'s plan: the remembered edge, the DNS address, then
      * alternate Cloudflare edges after a network-level failure of the DNS address. An HTTP answer
      * from the proxy (other than 403 from an edge that does not serve the zone) is a server
@@ -151,19 +195,22 @@ class Bridge internal constructor(
      */
     private fun dialEdges(epoch: Long, dc: Int, media: Boolean, target: String, buffer: Int,
                           timeout: Int, cfDomain: String, transport: CfTransport,
-                          isTestDc: Boolean, networkKey: String?): RawWebSocket {
+                          isTestDc: Boolean, networkKey: String?, probe: Boolean = false): RawWebSocket {
         val hops = cfEdgeRouter.plan(networkKey)
         var dnsFailed = false
         var dropped = 0
         val droppedEdges = ArrayList<CfEdgeRouter.Hop.Edge>(2)
         var lastError: Exception? = null
         var searching = false
+        // A background recheck learns nothing about addresses: the same edges are used for the
+        // working step meanwhile, and a recheck must not push them down the plan.
+        val cfEdgeRouter = if (probe) CfEdgeRouter() else this.cfEdgeRouter
         try {
         for (hop in hops) {
             if (cfEdgeRouter.isFallback(hops, hop) && !dnsFailed) break
             checkEpoch(epoch)
             // Any edge after the first hop means the usual address failed: tell the UI.
-            if (!searching && hop is CfEdgeRouter.Hop.Edge && hop != hops.first()) {
+            if (!probe && !searching && hop is CfEdgeRouter.Hop.Edge && hop != hops.first()) {
                 searching = true
                 connectivity.beginAlternateRouteSearch()
             }
@@ -242,23 +289,30 @@ class Bridge internal constructor(
                 }
             }
         }
+        // A recheck that saw the name dropped anywhere and passed nowhere: still blocked.
+        if (probe && dropped > 0) throw SniBlockedException(transport, lastError)
         throw lastError ?: WebSocketException("No CF proxy address available for DC $dc")
         } finally {
             if (searching) connectivity.endAlternateRouteSearch()
         }
     }
 
-    /** One WebSocket attempt; [edgeIp] overrides the CF proxy address (TLS SNI/Host unchanged). */
+    /**
+     * One WebSocket attempt; [edgeIp] overrides the CF proxy address (TLS SNI/Host unchanged).
+     * [deadlineMs] bounds the whole attempt (see [SetupDeadline]).
+     */
     private fun dialVia(epoch: Long, dc: Int, media: Boolean, target: String, buffer: Int,
                         timeout: Int, cfDomain: String?, transport: CfTransport,
-                        isTestDc: Boolean, edgeIp: String?): RawWebSocket {
+                        isTestDc: Boolean, edgeIp: String?, deadlineMs: Long? = null): RawWebSocket {
         checkEpoch(epoch)
-        val sockets = mutableListOf<Socket>()
-        try {
-            val ws = RawWebSocket.connectToDc(dc, media, target, buffer, cfDomain, timeout,
+        val sockets = java.util.Collections.synchronizedList(mutableListOf<Socket>())
+        val guard = UpstreamSetupGuard.current()
+        fun connect(): RawWebSocket =
+            RawWebSocket.connectToDc(dc, media, target, buffer, cfDomain, timeout,
                 onSocketCreated = { socket ->
                     sockets.add(socket)
                     pendingSockets.add(socket)
+                    guard?.track(socket)
                     if (!connectivity.trackSocket(epoch, socket)) checkEpoch(epoch)
                 },
                 resolveCfAddress = { domain ->
@@ -271,11 +325,19 @@ class Bridge internal constructor(
                     if (address == null) connectivity.recordIfCurrent(epoch) { address = cfDnsResolver.cached(domain) }
                     address
                  }, secure = transport.secure, isTestDc = isTestDc, splitHello = transport.splitHello)
-            if (!connectivity.isCurrent(epoch)) {
+        try {
+            val ws = if (deadlineMs == null) connect() else SetupDeadline.bounded(deadlineMs, close = {
+                synchronized(sockets) { sockets.forEach { runCatching { it.close() } } }
+            }, block = ::connect)
+            if (!connectivity.isCurrent(epoch) || guard?.cancelled == true) {
                 ws.abort()
                 checkEpoch(epoch)
             }
             return ws
+        } catch (e: Exception) {
+            // Sockets closed because Telegram gave up: not a failure of this address or route.
+            if (e !is CancellationException) UpstreamSetupGuard.checkActive(e)
+            throw e
         } finally {
             sockets.forEach {
                 connectivity.releaseSocket(it)
@@ -363,6 +425,31 @@ class Bridge internal constructor(
         relayInit: ByteArray,
         tcpFallback: TcpFallbackConnector,
         epoch: Long = connectivity.state.value.epoch,
+    ): UpstreamConnection = coroutineScope {
+        // Cancelling this setup (Telegram gave up, see ClientSetupInput) closes its sockets.
+        val guard = UpstreamSetupGuard()
+        val monitor = launch(start = CoroutineStart.UNDISPATCHED) {
+            try { awaitCancellation() } finally { guard.cancel() }
+        }
+        try {
+            withContext(Dispatchers.IO + guard.asContextElement()) {
+                connectUpstreamGuarded(dc, isMedia, config, pool, relayInit, tcpFallback, epoch, protoTag)
+            }
+        } finally {
+            guard.finish()
+            monitor.cancel()
+        }
+    }
+
+    private suspend fun connectUpstreamGuarded(
+        dc: Int,
+        isMedia: Boolean,
+        config: ProxyConfig,
+        pool: WsPool?,
+        relayInit: ByteArray,
+        tcpFallback: TcpFallbackConnector,
+        epoch: Long,
+        protoTag: Int,
     ): UpstreamConnection = withContext(Dispatchers.IO) {
         checkEpoch(epoch)
         val attemptStartedAt = System.currentTimeMillis()
@@ -621,9 +708,11 @@ class Bridge internal constructor(
                     onSocketCreated = { socket ->
                         sockets.add(socket)
                         pendingSockets.add(socket)
+                        UpstreamSetupGuard.current()?.track(socket)
                         if (!connectivity.trackSocket(epoch, socket)) checkEpoch(epoch)
                     },
                 )
+                if (UpstreamSetupGuard.current()?.cancelled == true) { ws.abort(); checkEpoch(epoch) }
                 if (!connectivity.recordIfCurrent(epoch) {
                     workerRetryAfter.remove(domain)
                     activeWorkers[dc] = domain
@@ -634,6 +723,7 @@ class Bridge internal constructor(
                 return UpstreamConnection(UpstreamType.CFPROXY, ws = ws, epoch = epoch, worker = true)
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
+                UpstreamSetupGuard.checkActive(e)
                 connectivity.recordIfCurrent(epoch, requireInternet = true) {
                     workerRetryAfter[domain] = System.currentTimeMillis() + 30_000
                 }
@@ -687,16 +777,24 @@ class Bridge internal constructor(
         Log.i(TAG, "DC$dc$mediaTag -> trying CF proxy (${availableDomains.size} available)")
 
         // Keep the sticky domain fast, then cap the remaining connection pressure at two.
-        val first = tryCfDomain(dc, isMedia, config.bufferSize, availableDomains.first(), epoch, config.cfTlsMode)
+        // All domains go to the same Cloudflare addresses: when the phone had no route at all,
+        // the others fail the same way. Seen 2026-11-24 on a fading Wi-Fi: 20 attempts per
+        // Telegram connection, ~1000 a minute, until the phone switched networks.
+        val noRoute = AtomicBoolean(false)
+        val first = tryCfDomain(dc, isMedia, config.bufferSize, availableDomains.first(), epoch, config.cfTlsMode, noRoute)
         if (first != null) return cfConnectionReady(dc, isMedia, first.first, first.second, epoch)
 
         for (batch in availableDomains.drop(1).chunked(CF_FALLBACK_PARALLELISM)) {
+            if (noRoute.get()) {
+                DiagnosticLogger.event("cf_domains_skipped", "dc" to dc, "media" to isMedia, "reason" to "no_route")
+                return null
+            }
             val candidates = ConcurrentHashMap.newKeySet<RawWebSocket>()
             try {
                 val results = coroutineScope {
                     batch.map { baseDomain ->
                         async(Dispatchers.IO) {
-                            tryCfDomain(dc, isMedia, config.bufferSize, baseDomain, epoch, config.cfTlsMode)?.also {
+                            tryCfDomain(dc, isMedia, config.bufferSize, baseDomain, epoch, config.cfTlsMode, noRoute)?.also {
                                 candidates.add(it.second)
                             }
                         }
@@ -720,6 +818,7 @@ class Bridge internal constructor(
         baseDomain: String,
         epoch: Long,
         tlsMode: CfTlsMode,
+        noRoute: AtomicBoolean? = null,
     ): Pair<String, RawWebSocket>? {
         checkEpoch(epoch)
         var skip = false
@@ -739,6 +838,7 @@ class Bridge internal constructor(
             baseDomain to ws
         } catch (e: Exception) {
             if (e is CancellationException) throw e
+            if (CfEdgeRouter.isLocalNetworkFailure(e)) noRoute?.set(true)
             record(epoch, dc, isMedia, TransportRoute.CLOUDFLARE, RoutePhase.FAILED)
             connectivity.recordIfCurrent(epoch, requireInternet = true) {
                 if (e is WsHandshakeError && e.statusCode == 429) {
@@ -791,9 +891,11 @@ class Bridge internal constructor(
         return try {
             checkEpoch(epoch)
             record(epoch, dc, isMedia, TransportRoute.TCP, RoutePhase.CONNECTING)
+            val guard = UpstreamSetupGuard.current()
             val socket = tcpFallback.connect(ip, 443, bufferSize, relayInit,
                 canRecordFailure = { connectivity.isCurrent(epoch) && connectivity.state.value.internetConfirmed },
-                isActive = { context.isActive && connectivity.isCurrent(epoch) })
+                isActive = { context.isActive && connectivity.isCurrent(epoch) && guard?.cancelled != true },
+                onSocketCreated = { guard?.track(it) })
                 ?: run {
                     record(epoch, dc, isMedia, TransportRoute.TCP, RoutePhase.COOLDOWN)
                     return null
@@ -807,6 +909,7 @@ class Bridge internal constructor(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            UpstreamSetupGuard.checkActive(e)
             record(epoch, dc, isMedia, TransportRoute.TCP, RoutePhase.FAILED)
             Log.w(TAG, "TCP direct to DC $dc failed: ${cfTransportErrorForLog(e)}")
             DiagnosticLogger.failure("upstream_attempt_failed", e, "dc" to dc, "route" to "tcp")
@@ -929,7 +1032,9 @@ class Bridge internal constructor(
         // Send relay init to upstream
         when (upstream.type) {
             UpstreamType.WEBSOCKET, UpstreamType.CFPROXY -> {
-                upstream.ws!!.sendBinary(relayInit)
+                val ws = upstream.ws!!
+                // A send that never drains must not hold the connection: bounded, then aborted.
+                SetupDeadline.bounded(RELAY_INIT_TIMEOUT_MS, close = ws::abort) { ws.sendBinary(relayInit) }
             }
             UpstreamType.TCP -> Unit // TCP setup has already sent relayInit.
         }

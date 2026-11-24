@@ -19,8 +19,8 @@ It is not affiliated with crim50n, Flowseal or Telegram.
    maker's app launch settings and connecting Telegram (also in Settings → Support).
 2. Delete old entries of this proxy in Telegram, then fully close Telegram (swipe it away in your
    recent apps) and open it again.
-3. On networks that block the usual Cloudflare addresses, the first connection can take up to about
-   30 seconds while the app finds another route; then it is remembered for that network.
+3. On networks that block the usual Cloudflare addresses, the first connection can take about
+   40-75 seconds while the app finds another route; then it is remembered for that network.
 
 ## Changes from TG WS Proxy
 
@@ -28,8 +28,13 @@ It is not affiliated with crim50n, Flowseal or Telegram.
   handshake by domain name, the app retries with the TLS ClientHello split into two records and two
   TCP segments; when connections then freeze or are cut off mid-stream (requests go out, nothing
   comes back), it falls back to port 80 within seconds. The working step is remembered per network
-  (told apart by its router or SIM card), also across reconnects and restarts, and plain TLS is
-  rechecked hourly. On and Off modes are still available.
+  (told apart by its router or SIM card), also across reconnects and restarts. Plain TLS is
+  rechecked in the background with a test connection, so Telegram's connections never wait for it:
+  after an hour, then less often while it stays blocked (up to once a day). On and Off modes are
+  still available.
+- **Connection setup:** stops dialing when Telegram gives up on a connection, stops trying other
+  proxy domains when the phone has no route at all, and bounds direct WebSocket setup and the first
+  write (adapted from Flowseal v1.12.0 and crim50n v2.1.2).
 - **Alternate Cloudflare addresses:** when the usual Cloudflare address for the proxy domains does
   not respond, the app finds another Cloudflare address that works and remembers it per network.
 - **Cloudflare proxy route:** TLS SNI is the bare base domain, and `kwsN.<domain>` goes only in the

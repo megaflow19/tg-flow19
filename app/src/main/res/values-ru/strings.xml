@@ -40,7 +40,7 @@
     <string name="connectivity_retrying">Повторяем подключение…</string>
     <string name="connectivity_unreachable">Не удаётся подключиться к Telegram.</string>
     <string name="connectivity_degraded">Некоторые подключения Telegram недоступны.</string>
-    <string name="connectivity_searching_alternate">Обычный адрес Cloudflare не отвечает. Ищем обходной путь… Это может занять до 30 секунд.</string>
+    <string name="connectivity_searching_alternate">Обычный адрес Cloudflare не отвечает. Ищем обходной путь… Это может занять 40–75 секунд.</string>
 
     <!-- Stats -->
     <string name="stats_connections">Соединения</string>
@@ -54,7 +54,7 @@
     <string name="stats_bad">Отклонено</string>
     <string name="stats_ws_errors">Ошибки WebSocket</string>
     <string name="rejected_warning_title">Старые записи прокси в Telegram</string>
-    <string name="rejected_warning_message">Много подключений приходит с неверными параметрами прокси. Обычно это означает, что в Telegram остались старые записи этого локального прокси. Удалите их, затем заново добавьте текущую ссылку. Это прекратит лишние переподключения, снизит расход батареи и поможет Telegram подключаться без задержек.</string>
+    <string name="rejected_warning_message">Много подключений приходит с неверными параметрами прокси. Обычно это означает, что в Telegram остались старые записи этого локального прокси. Удалите их, затем полностью закройте Telegram, смахнув его из списка недавних приложений, откройте снова и заново добавьте текущую ссылку. Это прекратит лишние переподключения, снизит расход батареи и поможет Telegram подключаться без задержек.</string>
     <string name="stats_upload">Отправлено</string>
     <string name="stats_download">Получено</string>
     <string name="stats_pool">Попадания в пул</string>

@@ -13,17 +13,17 @@ plugins {
 
 android {
     namespace = "dev.minios.tgwsproxy"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         // Own ID (fork of crim50n's dev.minios.tgwsproxy): installs alongside the original.
         // Never change it after the first public release, or updates stop installing over it.
         applicationId = "io.github.megaflow19.tgflow19"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 35
         // Version code scheme: major*10000 + minor*100 + patch (1.0.0 -> 10000); must match update.json.
-        versionCode = 10004
-        versionName = "1.0.4"
+        versionCode = 10005
+        versionName = "1.0.5"
     }
 
     val hasPropertiesFile = File("app/keystore/signing.properties").exists()

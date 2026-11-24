@@ -42,7 +42,7 @@
     <string name="connectivity_retrying">Retrying connection…</string>
     <string name="connectivity_unreachable">Unable to connect to Telegram.</string>
     <string name="connectivity_degraded">Some Telegram connections are unavailable.</string>
-    <string name="connectivity_searching_alternate">The usual Cloudflare address is not responding. Searching for another route… This can take up to 30 seconds.</string>
+    <string name="connectivity_searching_alternate">The usual Cloudflare address is not responding. Searching for another route… This can take 40–75 seconds.</string>
 
     <!-- Stats -->
     <string name="stats_connections">Connections</string>
@@ -56,7 +56,7 @@
     <string name="stats_bad">Rejected</string>
     <string name="stats_ws_errors">WebSocket errors</string>
     <string name="rejected_warning_title">Old proxy entries in Telegram</string>
-    <string name="rejected_warning_message">Many connections are arriving with incorrect proxy settings. This usually means Telegram still has old entries for this local proxy. Delete them, then add the current link again. This stops unnecessary reconnects, reduces battery use, and helps Telegram connect without delays.</string>
+    <string name="rejected_warning_message">Many connections are arriving with incorrect proxy settings. This usually means Telegram still has old entries for this local proxy. Delete them, fully close Telegram by swiping it away in your recent apps, open it again and add the current link again. This stops unnecessary reconnects, reduces battery use, and helps Telegram connect without delays.</string>
     <string name="stats_upload">Sent</string>
     <string name="stats_download">Received</string>
     <string name="stats_pool">Pool hits</string>

@@ -45,9 +45,13 @@ enum class CfTransport {
  *
  * Pure policy, no I/O except the optional [Store]. Networks are keyed by
  * [ConnectivitySnapshot.transportKey], which stays the same when the phone reconnects to the same
- * Wi-Fi or mobile network; steps for such keys are saved so a restart keeps them. The remembered
- * step expires after [RECHECK_MS], so a network that lifts the block gets plain TLS (and HTTP/2
- * media) back. An unknown network starts at [CfTransport.TLS].
+ * Wi-Fi or mobile network; steps for such keys are saved so a restart keeps them. An unknown
+ * network starts at [CfTransport.TLS].
+ *
+ * A network that lifts the block gets plain TLS (and HTTP/2 media) back through a background
+ * recheck ([recheckPlan], [recheckDone]): live connections stay on the working step meanwhile.
+ * Seen 2026-11-24: rechecking on live connections cost Telegram 5-50 s, once 5 minutes, every
+ * hour on networks where TLS stayed blocked all day. Each failed recheck doubles the interval.
  */
 internal class CfTransportSelector(
     private val clock: () -> Long = System::currentTimeMillis,
@@ -65,6 +69,9 @@ internal class CfTransportSelector(
         val transport: CfTransport,
         val since: Long,
         val avoidSplitUntil: Long = 0L,
+        val recheckAt: Long = 0L,
+        val recheckFailures: Int = 0,
+        val splitFreezes: Int = 0,
     )
 
     private class NetState {
@@ -73,6 +80,12 @@ internal class CfTransportSelector(
         var blockedUntil = 0L
         /** The split ClientHello connects but the stream freezes here: skip it until then. */
         var avoidSplitUntil = 0L
+        /** How many times the split froze here; each time it is avoided twice as long. */
+        var splitFreezes = 0
+        /** When the background recheck of a higher step is due (0: not scheduled). */
+        var recheckAt = 0L
+        /** Rechecks in a row that found plain TLS still blocked here. */
+        var recheckFailures = 0
         /** Times of recent strikes, oldest first (a sliding [STALL_WINDOW_MS] window). */
         val strikes = ArrayDeque<Long>()
     }
@@ -94,14 +107,64 @@ internal class CfTransportSelector(
     fun current(networkKey: String?, mode: CfTlsMode): CfTransport = synchronized(lock) {
         if (mode == CfTlsMode.OFF) return CfTransport.PLAIN
         val state = states[networkKey] ?: return CfTransport.TLS
-        if (state.transport != CfTransport.TLS && clock() - state.since >= RECHECK_MS) {
-            DiagnosticLogger.event("cf_transport_recheck", "from" to state.transport.name)
-            state.transport = CfTransport.TLS
-            state.since = clock()
-            persist()
-        }
         cap(state.transport, mode)
     }
+
+    /**
+     * Higher steps a background recheck should try now on this network, best first; empty when
+     * no recheck is due. Plain TLS is always tried; from port 80 the split is tried too unless it
+     * froze here recently.
+     */
+    fun recheckPlan(networkKey: String?, mode: CfTlsMode): List<CfTransport> = synchronized(lock) {
+        if (mode == CfTlsMode.OFF) return emptyList()
+        val state = states[networkKey] ?: return emptyList()
+        val current = cap(state.transport, mode)
+        if (current == CfTransport.TLS || clock() < state.recheckAt) return emptyList()
+        buildList {
+            add(CfTransport.TLS)
+            if (current == CfTransport.PLAIN && mode == CfTlsMode.AUTO && state.avoidSplitUntil <= clock()) {
+                add(CfTransport.TLS_SPLIT)
+            }
+        }
+    }
+
+    /**
+     * A background recheck finished. [working] is the best step whose handshake passed, or null.
+     * [conclusive] is false when the network itself failed (no route, timeouts before any
+     * handshake): then the recheck is retried soon and nothing is learned.
+     */
+    fun recheckDone(networkKey: String?, mode: CfTlsMode, working: CfTransport?, conclusive: Boolean) =
+        synchronized(lock) {
+            val state = states[networkKey] ?: return
+            val now = clock()
+            val from = cap(state.transport, mode)
+            if (!conclusive && working == null) {
+                state.recheckAt = now + RECHECK_RETRY_MS
+                DiagnosticLogger.event("cf_transport_recheck", "from" to from.name, "result" to "inconclusive")
+                return
+            }
+            if (working == CfTransport.TLS) {
+                // The failure count is kept: if plain TLS gets blocked or frozen again here, the
+                // next recheck waits as long as before instead of starting over at an hour.
+                state.recheckAt = 0L
+            } else {
+                state.recheckFailures = (state.recheckFailures + 1).coerceAtMost(MAX_RECHECK_FAILURES)
+                state.recheckAt = now + recheckInterval(state.recheckFailures)
+            }
+            DiagnosticLogger.event(
+                "cf_transport_recheck", "from" to from.name, "result" to (working?.name ?: "blocked"),
+                "failures" to state.recheckFailures,
+                "nextInMin" to if (state.recheckAt > 0L) (state.recheckAt - now) / 60_000L else null,
+            )
+            if (working != null && working < from) {
+                state.transport = working
+                state.since = now
+                state.strikes.clear()
+                state.blockedUntil = 0L
+                DiagnosticLogger.event("cf_transport_changed", "from" to from.name, "to" to working.name, "reason" to "recheck")
+            }
+            persist()
+        }
 
     /**
      * The handshake via [from] was dropped by name. Returns the transport to try next on this
@@ -122,6 +185,7 @@ internal class CfTransportSelector(
         state.transport = next
         state.since = now
         state.strikes.clear()
+        scheduleRecheck(state, now)
         persist()
         DiagnosticLogger.event("cf_transport_changed", "from" to from.name, "to" to next.name, "reason" to "sni_blocked")
         next
@@ -136,8 +200,10 @@ internal class CfTransportSelector(
      * Telegram closes such connections itself after 4-8 s, before a 6 s watchdog fires, so the
      * session ends count too. [STALL_STRIKES] strikes within [STALL_WINDOW_MS] step this network
      * down; strikes closer than [STALL_DEDUP_MS] count once (Telegram closes several sessions at
-     * once when it goes to the background). A frozen split is avoided for [AVOID_SPLIT_MS], so
-     * rechecks skip it. Returns the transport now in use when this strike changed it, else null.
+     * once when it goes to the background). A frozen split is avoided for [AVOID_SPLIT_MS], twice
+     * as long after each further freeze here (up to [AVOID_SPLIT_MAX_MS]), so rechecks skip it.
+     * Seen 2026-11-24: the split froze again on two networks the day after its 24 h avoidance.
+     * Returns the transport now in use when this strike changed it, else null.
      */
     fun streamStalled(networkKey: String?, mode: CfTlsMode, transport: CfTransport): CfTransport? = synchronized(lock) {
         if (!transport.secure || mode == CfTlsMode.OFF) return null
@@ -149,7 +215,14 @@ internal class CfTransportSelector(
         state.strikes.addLast(now)
         if (state.strikes.size < STALL_STRIKES) return null
         state.strikes.clear()
-        if (transport == CfTransport.TLS_SPLIT) state.avoidSplitUntil = now + AVOID_SPLIT_MS
+        if (transport == CfTransport.TLS_SPLIT) {
+            state.splitFreezes = (state.splitFreezes + 1).coerceAtMost(MAX_SPLIT_FREEZES)
+            state.avoidSplitUntil = now + avoidSplitDuration(state.splitFreezes)
+        } else {
+            // Plain TLS passes the handshake but freezes: a passing recheck proves little here,
+            // so the next one waits longer instead of bringing the freeze back every hour.
+            state.recheckFailures = (state.recheckFailures + 1).coerceAtMost(MAX_RECHECK_FAILURES)
+        }
         val next = next(transport, mode, avoidSplit = state.avoidSplitUntil > now)
         if (next == null) {
             persist()
@@ -157,6 +230,7 @@ internal class CfTransportSelector(
         }
         state.transport = next
         state.since = now
+        scheduleRecheck(state, now)
         persist()
         DiagnosticLogger.event("cf_transport_changed", "from" to transport.name, "to" to next.name, "reason" to "stream_frozen")
         cap(next, mode)
@@ -190,9 +264,18 @@ internal class CfTransportSelector(
             since = partial.since
             blockedUntil = partial.blockedUntil
             avoidSplitUntil = partial.avoidSplitUntil
+            splitFreezes = partial.splitFreezes
+            recheckAt = partial.recheckAt
+            recheckFailures = partial.recheckFailures
             strikes.addAll(partial.strikes)
         }
         persist()
+    }
+
+    private fun scheduleRecheck(state: NetState, now: Long) {
+        if (state.transport != CfTransport.TLS && state.recheckAt == 0L) {
+            state.recheckAt = now + recheckInterval(state.recheckFailures)
+        }
     }
 
     private fun load(store: Store) {
@@ -201,16 +284,21 @@ internal class CfTransportSelector(
         } catch (_: Exception) {
             null
         } ?: return
-        val now = clock()
         for (entry in saved) {
             if (entry.key in states) continue
-            // Steps past their recheck are useless; keep only the split avoidance if still valid.
-            val expired = now - entry.since >= RECHECK_MS
-            if (expired && entry.avoidSplitUntil <= now) continue
+            // Steps are kept until a background recheck finds a better one (1.0.4 and older
+            // saved no recheck time: recheck an hour after the step was taken).
             state(entry.key).apply {
-                transport = if (expired) CfTransport.TLS else entry.transport
-                since = if (expired) now else entry.since
+                transport = entry.transport
+                since = entry.since
                 avoidSplitUntil = entry.avoidSplitUntil
+                splitFreezes = entry.splitFreezes
+                recheckFailures = entry.recheckFailures
+                recheckAt = when {
+                    entry.recheckAt > 0L -> entry.recheckAt
+                    entry.transport != CfTransport.TLS -> entry.since + RECHECK_MS
+                    else -> 0L
+                }
             }
         }
     }
@@ -220,8 +308,13 @@ internal class CfTransportSelector(
         val now = clock()
         val saved = states.mapNotNull { (key, state) ->
             if (key == null || key.startsWith(TRANSIENT_KEY_PREFIX)) return@mapNotNull null
-            if (state.transport == CfTransport.TLS && state.avoidSplitUntil <= now) return@mapNotNull null
-            Saved(key, state.transport, state.since, state.avoidSplitUntil)
+            if (state.transport == CfTransport.TLS && state.avoidSplitUntil <= now && state.splitFreezes == 0) {
+                return@mapNotNull null
+            }
+            Saved(
+                key, state.transport, state.since, state.avoidSplitUntil,
+                state.recheckAt, state.recheckFailures, state.splitFreezes,
+            )
         }
         try {
             store.save(json.encodeToString(saved))
@@ -257,7 +350,11 @@ internal class CfTransportSelector(
         /** Keys built from a bare Android network handle change on reconnect: never saved. */
         const val TRANSIENT_KEY_PREFIX = "handle:"
 
+        /** First background recheck after a step down; doubles per failed recheck. */
         const val RECHECK_MS = 60 * 60_000L
+        const val RECHECK_MAX_MS = 24 * 60 * 60_000L
+        /** Retry of a recheck that the network itself spoiled (no route, timeouts). */
+        const val RECHECK_RETRY_MS = 5 * 60_000L
         const val BLOCKED_BACKOFF_MS = 30_000L
         const val STALL_STRIKES = 3
         const val STALL_WINDOW_MS = 2 * 60_000L
@@ -267,6 +364,15 @@ internal class CfTransportSelector(
          * avoidance ran out between hourly rechecks and the split froze Telegram again.
          */
         const val AVOID_SPLIT_MS = 24 * 60 * 60_000L
+        const val AVOID_SPLIT_MAX_MS = 30 * 24 * 60 * 60_000L
+        private const val MAX_SPLIT_FREEZES = 16
+        private const val MAX_RECHECK_FAILURES = 16
+
+        fun recheckInterval(failures: Int): Long =
+            (RECHECK_MS shl failures.coerceIn(0, 16)).coerceAtMost(RECHECK_MAX_MS)
+
+        fun avoidSplitDuration(freezes: Int): Long =
+            (AVOID_SPLIT_MS shl (freezes - 1).coerceIn(0, 16)).coerceAtMost(AVOID_SPLIT_MAX_MS)
         /**
          * Live check on open CF sessions: this many bytes sent after the last byte came back and
          * unanswered this long count as a strike before Telegram gives up on the connection.
